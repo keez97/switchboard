@@ -12,7 +12,7 @@ Sessions get a few small pieces: notes about changes made elsewhere, holds that 
 
 A few examples from everyday development follow. They are only a small sample, and the same pieces combine into far more setups than these.
 
-**A team of sessions.** Moving an API from REST to GraphQL, with a session in the server repo and one in each of two client repos. The server session builds the schema while the client sessions ask it how each old endpoint maps to a query, and a planning session sends each one its next task as the last one lands. Tasks wait at an address, so a session started tomorrow that takes a client's role finds its open work.
+**A team of sessions.** Adding paid plans to an app. A planning session splits the work: the API session builds the billing endpoints and the payment webhook, the web session builds the checkout page, and the infra session adds the webhook's secret and route. The web session asks the API session what its responses look like before building against them, and the planner reviews each piece as it lands and sends the next. Tasks wait at an address, so a session started tomorrow that takes a builder's role finds its open work.
 
 **Work that runs while you're away.** Before you log off, your session asks a test runner on a server to run the full Playwright suite across three browsers. The runner is a small script serving tasks, so it needs no Claude session open. In the morning, your first session shows which specs failed and on which commit.
 
