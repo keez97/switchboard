@@ -1,5 +1,7 @@
 # switchboard
 
+<p align="center"><img src="docs/logo.svg" alt="A pencil sketch of a telephone switchboard, with patch cords connecting its jacks" width="600"></p>
+
 switchboard coordinates Claude Code sessions running in different repos or on different machines. It tells each session what changed elsewhere, lets you freeze a path for all of them, and lets sessions hand work and questions to each other, with each one told whose instruction it is.
 
 It is a Claude Code plugin: hooks, one Python CLI, a skill and four slash commands. The board is a folder of JSON files, and across machines that folder is a git repo you own. There is no server.
