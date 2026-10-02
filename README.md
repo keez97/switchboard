@@ -24,6 +24,18 @@ switchboard gives sessions a few small pieces: notes about changes made elsewher
 
 **Your own harness.** An orchestrator that starts headless sessions, gives each a role and feeds them tasks; a dashboard over the board folder; a CI job that files a task when a build breaks; a scheduler that sends work to whichever machine is free. switchboard supplies the addresses and says who may ask what. The policy is yours.
 
+## switchboard and Claude Code's own messaging
+
+Claude Code sessions can already message each other, and switchboard is built on that. It uses Claude Code's messaging to reach a live session, and its hooks add what a message alone doesn't carry: when a message travels over a link, the receiving session gets a header saying what it may do with it, and a session can't ask a peer to do something it was itself refused.
+
+| | Claude Code's messaging | What switchboard adds |
+|---|---|---|
+| Addressing | a running session | an address such as `web:frontend` that outlives sessions; a new session can take it over |
+| Work nobody is listening for | the receiving session has to be running | tasks wait in the board until a session or a script serves them, on any machine |
+| Authority | a peer's message is information for the receiver to weigh | a link says who may direct whom, within what scope and for how long, and the receiver is told which applies |
+
+It also covers what nobody sends as a message: change notes when a watched file, branch or setting changes elsewhere, and holds that refuse edits and pushes under a path.
+
 ## Build on it
 
 switchboard is a thin layer, meant to be extended into your own agent setup. The CLI is one Python file with no dependencies. The board is a folder of JSON files, so anything that reads JSON can read it; writes go through the CLI, which checks them. The commands a script needs print JSON (`switchboard task <tid> --json`, `switchboard paths --json`) or one id per line (`switchboard tasks --for <address> --open`). Only the hooks are tied to Claude Code. The record format may still change before 1.0.
