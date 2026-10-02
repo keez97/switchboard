@@ -4,7 +4,7 @@ switchboard coordinates Claude Code sessions. When you run several sessions at o
 
 It is a Claude Code plugin: hooks, one Python CLI, a skill and four slash commands. The board is a folder of JSON files. Across machines that folder is a git repo you own. There is no server.
 
-## What it's for
+## What switchboard is for
 
 switchboard gives sessions a few small pieces: notes about changes made elsewhere, holds that freeze a path, roles that give a session an address, links that say who may direct whom, and tasks that wait at an address until someone serves them. Most uses combine several of them, and the board doesn't care whether the thing serving a task is a Claude session, a script or another tool.
 
@@ -24,7 +24,7 @@ switchboard gives sessions a few small pieces: notes about changes made elsewher
 
 **Your own harness.** An orchestrator that starts headless sessions, gives each a role and feeds them tasks; a dashboard over the board folder; a CI job that files a task when a build breaks; a scheduler that sends work to whichever machine is free. switchboard supplies the addresses and says who may ask what. The policy is yours.
 
-## switchboard and Claude Code's own messaging
+## Claude Code messaging
 
 Claude Code sessions can already message each other, and switchboard is built on that. It uses Claude Code's messaging to reach a live session, and its hooks add what a message alone doesn't carry: when a message travels over a link, the receiving session gets a header saying what it may do with it, and a session can't ask a peer to do something it was itself refused.
 
@@ -36,11 +36,22 @@ Claude Code sessions can already message each other, and switchboard is built on
 
 It also covers what nobody sends as a message: change notes when a watched file, branch or setting changes elsewhere, and holds that refuse edits and pushes under a path.
 
-## Build on it
+## Install
+
+In Claude Code:
+
+```
+/plugin marketplace add keez97/switchboard
+/plugin install switchboard@switchboard
+```
+
+Then run `/reload-plugins` in each open session, or start new ones.
+
+## Extending switchboard
 
 switchboard is a thin layer, meant to be extended into your own agent setup. The CLI is one Python file with no dependencies. The board is a folder of JSON files, so anything that reads JSON can read it; writes go through the CLI, which checks them. The commands a script needs print JSON (`switchboard task <tid> --json`, `switchboard paths --json`) or one id per line (`switchboard tasks --for <address> --open`). Only the hooks are tied to Claude Code. The record format may still change before 1.0.
 
-## What a session sees
+## Notes
 
 Sessions don't have to ask. The hooks put notes into a session's context on its next prompt or tool call:
 
@@ -66,17 +77,6 @@ switchboard hold h341fb6: repo:github.com/you/web:src/auth is frozen until 2026-
 
 Every note lands in the session's transcript. When an agent did something odd, the transcript shows what it had been told and when.
 
-## Install
-
-In Claude Code:
-
-```
-/plugin marketplace add keez97/switchboard
-/plugin install switchboard@switchboard
-```
-
-Then run `/reload-plugins` in each open session, or start new ones.
-
 ## First run
 
 Nothing needs setting up on one machine. At the first session start the plugin:
@@ -89,7 +89,7 @@ A repo joins the board when a session starts in it. `switchboard register <path>
 
 To put your name in the notes and pick the machine's name, run `/switchboard:init` in a session. It asks for both, then writes `~/.config/switchboard/config.json`, makes the board folder a local git repo and makes a signing key for this machine (`~/.ssh/switchboard_<machine>`). From a session it also prints a command that adds the key to `keys/allowed_signers`, the list of machines whose signed task requests are trusted; run that yourself in a terminal, since no Claude session writes that file. Run as `switchboard init` from a terminal on a board it has just made, init writes that line itself and prints no command. `switchboard paths` shows every value and where it came from.
 
-## Using it on one machine
+## Using switchboard
 
 Watch something, and sessions in the watching repo hear when it changes:
 
@@ -131,9 +131,9 @@ switchboard task t8b1f8fc1      # notified laptop 12:31; seen laptop 12:33
 
 `--key` makes a request idempotent: the same worker and key never create a second task. A body is capped at 8 KB, and a body that looks like it contains a secret is refused. The worker records `working`, `input-required`, `completed` (with artifact references to a commit), `failed` or `rejected`. The requester can ask to cancel; the worker then records `canceled` or keeps its own answer.
 
-## Two machines
+## Multi-machine use
 
-Git sync is how the board spans machines. The board folder becomes a clone of a private repo you own. Sessions pull when they start and push when a turn ends, and a prompt or tool call starts a background pull at most once a minute.
+Machines share a board through git. On each machine the board folder is a clone of one private repo you own, and every record carries the machine it came from. Nothing in switchboard is tied to a number of machines: every machine that joins reads and writes the same board. The tests run two.
 
 On the first machine, run `/switchboard:init` if you have not, create an empty private repo, and push the board to it from a terminal:
 
@@ -141,17 +141,27 @@ On the first machine, run `/switchboard:init` if you have not, create an empty p
 switchboard init --remote git@github.com:you/my-board.git
 ```
 
-On the second machine, install the plugin and run:
+On every other machine, install the plugin and run:
 
 ```
 /switchboard:init --join git@github.com:you/my-board.git
 ```
 
-It clones the board, makes a signing key for this machine and prints a command for the first machine. That command adds the new machine's line to `keys/allowed_signers`. Run it yourself, in a terminal on the first machine. Until the line is there, the new machine's task requests read BAD SIGNATURE on the other machines and count as information.
+It clones the board, makes a signing key for this machine and prints a command that adds the new machine's line to `keys/allowed_signers`. Run it yourself, in a terminal on a machine that is already on the board. Until the line is there, the new machine's task requests read BAD SIGNATURE on the other machines and count as information.
 
-Every record carries the machine it came from. `switchboard who` also lists sessions on other machines that have Remote Control on and were seen in the last three days. Claude Code's own messaging reaches them.
+Events, holds, roles, links and tasks are records in the board, so they reach every machine through git. Sessions pull when they start and push when a turn ends, and a prompt or tool call starts a background pull at most once a minute. A change made on one machine usually shows on another within a minute or two while sessions are active on both. Each machine keeps its state folder (cursors, caches, `errors.log`) and its view of which local sessions are alive to itself.
 
-### Always on
+Live messages between sessions on different machines go through Claude Code's Remote Control. `switchboard who` lists sessions on other machines that have Remote Control on and were seen in the last three days, with the address Claude Code's messaging uses to reach them.
+
+A task request from another machine counts over a link only when its signature verifies against `keys/allowed_signers`, so adding a machine's line is how you decide to trust it. Anyone who can push to the board repo can still write records: keep the repo private and its access limited to your own machines.
+
+Some setups that work this way:
+
+- **A laptop and a server.** Sessions on the laptop request work, and a worker on the server serves it while the laptop is closed. Turn on always-on sync on the server.
+- **Roles tied to a machine.** Give the session or worker on a machine a role that names what only it can do, such as `app:mac-build` or `ml:gpu`, and send that kind of work to that address.
+- **Several servers.** Each serves its own addresses, and one board shows who holds which role and which tasks are open.
+
+### Always-on sync
 
 With no session open, nothing syncs. A machine that runs unattended workers, which poll the board for tasks, can keep its board current with a background job:
 
@@ -162,11 +172,11 @@ switchboard init --always-on --remove
 
 It installs only on a board with a remote, and only when you run that command.
 
-## Permission mode
+## Permission modes
 
 Run your sessions in bypass permissions for full function. Claude Code holds a message from another session for your approval when the two sessions run in different permission modes, and the sender only hears that delivery is unconfirmed. In auto mode the classifier can also stop switchboard commands. A peer that never answers usually has a held message waiting. Notes, holds and tasks reach a session through its hooks and work in any mode.
 
-## Who may instruct whom
+## Links
 
 A **link** is a directed pair of addresses with a scope, a daily message cap and an end date. Any link also ends after 3 days with no message and no task activity. Sessions can make links between themselves, within limits; anything wider is yours.
 
@@ -194,7 +204,7 @@ Once a link is active, a message from the `--from` end arrives with a header tel
 
 The header on a message over a link also lists what stays yours whatever the link says: deleting or rewriting history, anything public, spending money, secrets, permissions, CLAUDE.md, settings and hooks, a link beyond 24 hours or extending one, raising a link's cap, releases, and overriding a hold.
 
-## Tasks without a session
+## Workers
 
 A task waits at its address, so a script can serve it. `switchboard tasks --for web:frontend --open` prints the ids of tasks still in `submitted`, oldest first, one per line. That includes tasks already seen and tasks with a cancel request; `switchboard task <tid> --json` says which. The script runs with its working directory inside the worker's repo, since only the worker writes a task's state. For each id it runs `switchboard task seen`, records `working`, does the work and records `completed` or `failed`. Run the loop as a systemd service or launchd agent and a machine works on tasks with no session open. switchboard ships no worker: the loop belongs in the repo that owns the work.
 
@@ -261,6 +271,6 @@ tests/selftest.sh 20-task-notify    # one section
 
 Each section builds its own throwaway board and home. A crash in any CLI run fails its section. To try the CLI without touching your own board, run it with `HOME` set to an empty folder and `XDG_CONFIG_HOME` unset: the config file, board, state dir, signing key and the `~/.local/bin` link all live under HOME. `SWITCHBOARD_DIR` and `SWITCHBOARD_STATE` alone move only the board and the state dir; your config file still supplies the owner, machine and scan folders, and a session start still makes `~/.local/bin/switchboard`.
 
-## Licence
+## License
 
 MIT. See [LICENSE](LICENSE).
