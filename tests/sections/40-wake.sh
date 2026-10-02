@@ -24,7 +24,7 @@ listen(){ # name cwd session tag [VAR=value]: switchboard wait as the stand-in's
 claim(){ # pid: the waiter pid the claim for that stand-in names, or nothing
   [ ! -f "$SWITCHBOARD_STATE/claude/wait-$1.json" ] || python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('waiter', ''))" "$SWITCHBOARD_STATE/claude/wait-$1.json"; }
 arm(){ # name pid cwd session tag [VAR=value]: start a waiter and return once it has claimed the stand-in's process
-  local old n=0; old=$(claim "$2"); listen "$1" "$3" "$4" "$5" "${6:-}"
+  local old c n=0; old=$(claim "$2"); listen "$1" "$3" "$4" "$5" "${6:-}"
   until { c=$(claim "$2"); [ -n "$c" ] && [ "$c" != "$old" ]; } || [ $n -gt 50 ]; do python3 -c "import time; time.sleep(0.1)"; n=$((n+1)); done; }
 rc_of(){ # tag seconds: the waiter's exit code once it is out within that time, else running
   local n=0; until [ -s "$T/$1.rc" ] || [ $n -ge $(($2 * 10)) ]; do python3 -c "import time; time.sleep(0.1)"; n=$((n+1)); done
@@ -136,6 +136,14 @@ listen W "$T/alpha" sW2 w11
 [ "$(rc_of w11 4)" = 0 ] && [ ! -s "$T/w11.err" ] && grep -q " wait save:[0-9]* IsADirectoryError" "$SWITCHBOARD_STATE/errors.log" \
   && ok "an exception in the waiter is logged and it exits 0, not 2" || die "error path: $(why w11) $(cat "$SWITCHBOARD_STATE/errors.log")"
 rmdir "$SWITCHBOARD_STATE/claude/wait-$W.json"
+
+# ---- the event that woke it shows even when newer events push it past the five a note carries
+under W "$T/alpha" "\"$B\" unlink $LID" </dev/null >/dev/null 2>&1
+"$B" watch "$T/beta" path "$T/src/NOTES" >/dev/null; echo 0 > "$T/src/NOTES"; (cd "$T/src" && "$B" detect)
+for i in 1 2 3 4 5; do echo "$i" > "$T/src/NOTES"; (cd "$T/src" && "$B" detect); done
+listen R "$T/beta" sR w12
+[ "$(rc_of w12 4)" = 2 ] && has "link $LID closed: ended by" < "$T/w12.err" && [ "$(grep -c "NOTES content changed" "$T/w12.err")" = 5 ] \
+  && ok "the event that woke the session shows even behind five newer ones" || die "cutoff: $(why w12)"
 
 python3 "$FC" quit "$T/fc-W.sock"; python3 "$FC" quit "$T/fc-R.sock"
 finish

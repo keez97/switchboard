@@ -6154,8 +6154,8 @@ def wakes_for(e, rec, sid):
 
 def work_waiting(session, rec, passed):
     """The waiter's look, marking nothing: True when a prompt now would show this session a first task note for the
-    role it holds, a proposal for the end it holds, the note that it is bound to a link, or an event wakes_for passes.
-    passed holds the event files already read that do not concern it; each is read once."""
+    role it holds, a proposal for the end it holds or the note that it is bound to a link; the event itself when one
+    wakes_for passes. passed holds the event files already read that do not concern it; each is read once."""
     if _task_notes(session, rec, peek=True) or proposal_notes(rec, peek=True):
         return True
     for l in links():
@@ -6172,7 +6172,7 @@ def work_waiting(session, rec, passed):
             continue  # read again next time: git may have created it and not yet written it
         if e["expires"] > now() and e["id"] not in seen and e["observer"].get("session") != sid \
                 and (rid in e["affects"] or "all" in e["affects"]) and wakes_for(e, rec, sid):
-            return True
+            return e
         passed.add(f.name)
     return False
 
@@ -6215,7 +6215,8 @@ def wait():
         if new:  # a clear: no Stop comes, so this waiter goes on for the new session id. Its SessionStart shows what
             session["session_id"], passed = cur["sessionId"], set()  # waits; the first look for it is the next one
         rec = None if new else me(session)
-        if rec and work_waiting(session, rec, passed):
+        why = rec and work_waiting(session, rec, passed)
+        if why:
             wakes = [t for t in c.get("wakes") or [] if type(t) in (int, float) and time.time() - t < 3600]
             if len(wakes) >= WAKE_CAP:
                 return log_error("wait", "%d wakes in the last hour for Claude process %d; this waiter stops and the "
@@ -6223,6 +6224,8 @@ def wait():
             _WAKING[0], T0, _TREE_LEFT[0] = True, time.monotonic(), TREE_WAIT  # the budgets a hook has from its start
             text = "\n".join(x for x in (safe(task_notes, session, rec), safe(link_notes, rec), safe(proposal_notes, rec),
                                          safe(deliver, session)) if x)
+            if isinstance(why, dict) and why["summary"] not in text:  # deliver shows the newest MAX_DELIVER only
+                text += "\n- %s (%s) %s" % (iso(why["ts"]), why["machine"], why["summary"])
             if text:
                 sys.stderr.write("switchboard woke this session: work for it arrived while it was idle. Act on the "
                                  "notes below as you would at a prompt.\n%s\n" % text)
