@@ -10,15 +10,17 @@ It is a Claude Code plugin: hooks, one Python CLI, a skill and four slash comman
 
 Sessions get a few small pieces: notes about changes made elsewhere, holds that freeze a path, roles that give a session an address, links that say who may direct whom, and tasks that wait at an address until someone serves them. You use them by talking to your sessions. The plugin's skill teaches each session the commands, so beyond `/switchboard:init` there is nothing new to learn.
 
-**A team of sessions.** One session plans and others build, each in its own repo. The planner links to each builder, sends it a series of tasks and hears as each one is done. Tasks wait at an address, so a session started tomorrow that takes a builder's role finds its open work.
+A few examples from everyday development follow. They are only a small sample, and the same pieces combine into far more setups than these.
 
-**Work that runs while you're away.** A session on your laptop requests a long job, an evaluation run or a full test matrix, from a script serving tasks on a server. The script runs with no Claude session open and records the result with the commits it made. The next session you open finds it in its first note.
+**A team of sessions.** Moving an API from REST to GraphQL, with a session in the server repo and one in each of two client repos. The server session builds the schema while the client sessions ask it how each old endpoint maps to a query, and a planning session sends each one its next task as the last one lands. Tasks wait at an address, so a session started tomorrow that takes a client's role finds its open work.
 
-**Work that needs a particular machine.** An iOS build needs the Mac and a GPU job needs the server. Give the session or script there a role, and every other machine can hand it work. Requests between machines are signed.
+**Work that runs while you're away.** Before you log off, your session asks a test runner on a server to run the full Playwright suite across three browsers. The runner is a small script serving tasks, so it needs no Claude session open. In the morning, your first session shows which specs failed and on which commit.
 
-**A change that ripples through many repos.** Watch a shared library's release branches from every repo that uses it, hold the dependents while the new version lands, then ask each dependent's session to move to it.
+**Work that needs a particular machine.** You work on Linux, and the iOS build needs Xcode on the Mac. Your session hands the build and the simulator tests to the Mac session, and the two go back and forth on the failures until it passes. Requests between machines are signed.
 
-**Your own harness.** An orchestrator that starts headless sessions and feeds them tasks, a dashboard over the board folder, a CI job that files a task when a build breaks. switchboard supplies the addresses and says who may ask what. The policy is yours.
+**A change that ripples through many repos.** A logging library with a security hole has to be bumped in twelve services. Each service's session, or a script serving its address, gets a task to update the library, run its tests and report back with the commit. One list shows which services are done.
+
+**Your own harness.** A script that turns a GitHub issue label into a task for the right repo's session, a CI job that files a task for the owner when main goes red, a morning dashboard over the board folder. switchboard supplies the addresses and says who may ask what. The policy is yours.
 
 ## Claude Code messaging
 
