@@ -1,0 +1,17 @@
+{
+  "name": "switchboard",
+  "version": "0.4.0",
+  "description": "Notes, holds, roles, links and tasks between Claude Code sessions, across repos and machines.",
+  "author": {
+    "name": "keez97",
+    "url": "https://github.com/keez97"
+  },
+  "repository": "https://github.com/keez97/switchboard",
+  "keywords": [
+    "claude-code",
+    "multi-agent",
+    "coordination",
+    "hooks"
+  ],
+  "license": "MIT"
+}

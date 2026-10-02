@@ -1,0 +1,17 @@
+{
+  "name": "switchboard",
+  "owner": {
+    "name": "keez97",
+    "url": "https://github.com/keez97"
+  },
+  "metadata": {
+    "description": "The switchboard plugin for Claude Code."
+  },
+  "plugins": [
+    {
+      "name": "switchboard",
+      "source": ".",
+      "description": "Notes, holds, roles, links and tasks between Claude Code sessions, across repos and machines."
+    }
+  ]
+}
