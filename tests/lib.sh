@@ -11,7 +11,7 @@ T="$(cd "$(mktemp -d)" && pwd -P)"
 # a caller's own board variables (a session that runs the suite with the board switched off, say) must not leak in,
 # under either name the CLI reads (AGENT_BOARD_ is the older one), nor a config file of the caller's own
 for v in MACHINE DIR STATE OWNER ALLOW_TMP NOW SESSION_ID TEST_PROPOSE SESSIONS_DIR NOSYNC NOSCAN OFF PULL_EVERY NOWALK \
-  GUARD_BUDGET; do unset "SWITCHBOARD_$v" "AGENT_BOARD_$v"; done
+  GUARD_BUDGET WAIT_TIMEOUT; do unset "SWITCHBOARD_$v" "AGENT_BOARD_$v"; done
 unset SWITCHBOARD_SCAN SWITCHBOARD_SHARED SWITCHBOARD_SCOPE_IDS SWITCHBOARD_SKIP XDG_CONFIG_HOME
 # the per-user fallback dir (errors when the state dir is unwritable, the config file's notice mark) under TMPDIR
 export TMPDIR="$T/tmp"; mkdir -p "$TMPDIR"

@@ -188,7 +188,7 @@ python3 - "$B" <<'PY' && ok "each older AGENT_BOARD_ name the CLI reads has a SW
 import importlib.machinery, importlib.util, os, re, sys
 src = open(sys.argv[1]).read()
 names = {"MACHINE", "DIR", "STATE", "OWNER", "ALLOW_TMP", "NOW", "SESSION_ID", "TEST_PROPOSE", "SESSIONS_DIR", "NOSYNC",
-         "NOSCAN", "OFF", "PULL_EVERY", "NOWALK", "GUARD_BUDGET"}
+         "NOSCAN", "OFF", "PULL_EVERY", "NOWALK", "GUARD_BUDGET", "WAIT_TIMEOUT"}
 used = set(re.findall(r'board_env\("(\w+)"\)', src)) | set(re.findall(r'setting\("\w+", .*?"(\w+)", old=True\)', src))
 literal = set(re.findall(r'AGENT_BOARD_\w+', src)) - {"AGENT_BOARD_"}
 if used != names or literal - {"AGENT_BOARD_" + n for n in names}:

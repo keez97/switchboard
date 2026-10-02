@@ -4879,6 +4879,10 @@ def task_request(a):
     sync(pull=False)
     print("%s requested from %s: %s" % (tid, end_str(worker), subject))
     if agent_caller(d):
+        sys.stdout.flush()  # stdout stays one line for scripts; the rest goes to stderr
+        print("switchboard's listener wakes the session holding %s within seconds when it is idle on this machine (about "
+              "a minute from another machine), and if it has not answered within a few minutes, message it at the to= "
+              "address `%s who` prints." % (end_str(worker), CLI_NAME), file=sys.stderr)
         tell_cli(d["sessionId"], {"kind": "task", "id": tid, "repo": worker["repo"], "rname": rname(worker["repo"]),
                                   "role": worker["role"], "subject": subject}, worker["repo"] != rid)
 
@@ -5236,7 +5240,7 @@ def task_notes(session, rec):
         return ""
 
 
-def _task_notes(session, rec):
+def _task_notes(session, rec, peek=False):
     sid = session.get("session_id") or ""
     if not sid or not rec or not rec.get("role") or not rec.get("repo"):
         return ""
@@ -5269,6 +5273,8 @@ def _task_notes(session, rec):
             continue
         ts = req.get("ts")
         due.append((ts if isinstance(ts, (int, float)) else 0, tid, req, m))
+    if peek:  # the listener: True when a first note waits (a repeat, again:, waits for a prompt); nothing is marked
+        return any(not m for _, _, _, m in due)
     # tids are hashes, so their order says nothing about age: the oldest requests first, the rest on a later call
     for _, tid, req, m in sorted(due, key=lambda x: x[:2])[:NOTIFY_MAX]:
         again = bool(m)
@@ -5554,8 +5560,10 @@ def link_propose(a, ends, d):
     cur = role_holder(other["repo"], other["role"])
     print("link %s proposed, not active: %s within: %s" % (lid, link_ends(l), a.scope))
     print("  %s:%s held by this session%s" % (rname(mine["repo"]), mine["role"], " (taken now)" if not held else ""))
-    print("  %s:%s %s" % (rname(other["repo"]), other["role"], ('held by "%s" to=%s: it gets the proposal at its next '
-                                                              'prompt or tool call' % (cur.get("name", ""), address(cur) or "-")) if cur else
+    print("  %s:%s %s" % (rname(other["repo"]), other["role"], (
+        'held by "%s" to=%s: switchboard\'s listener wakes it within seconds when it is idle on this machine (about a '
+        'minute from another machine), and if it has not answered within a few minutes, message it at that to= '
+        'address' % (cur.get("name", ""), address(cur) or "-")) if cur else
                          "open: offered to sessions in %s that hold no role; accepting binds the session" % rname(other["repo"])))
     print("  Carries no authority until accepted with `%s link accept %s`. Then it runs %s from acceptance, %s. "
           "Unanswered it ends %s." % (CLI_NAME, lid, span_str(span), cap_str(cap), iso(l["expires"])))
@@ -6014,12 +6022,13 @@ def role_notes(session, rec, source):
     return "\n".join(out)
 
 
-def told(rec, l, kind="told"):
-    """True the first time this is asked: bound notes once per session id, offers once per seat."""
+def told(rec, l, kind="told", peek=False):
+    """True the first time this is asked: bound notes once per session id, offers once per seat. peek asks without
+    marking it told (the listener)."""
     st = load(STATE / "offered.json", {})
     key = "%s:%s:%s" % (kind, rec["session_id"] if kind.startswith("told") else "%s:%s" % seat(rec)[1:], l["id"])
-    if key in st:
-        return False
+    if key in st or peek:
+        return key not in st
     st[key] = now()
     save(STATE / "offered.json", {k: v for k, v in st.items() if now() - v < 30 * 86400})
     return True
@@ -6064,10 +6073,11 @@ def link_notes(rec):
     return "\n".join(out)
 
 
-def proposal_notes(rec):
+def proposal_notes(rec, peek=False):
     """SessionStart, UserPromptSubmit, PostToolUse (never a subagent): once per session, each open proposal whose
     other end this session holds, or whose other end is open in this session's repo while it holds no role there.
-    Any failure is logged and gives no note."""
+    Any failure is logged and gives no note. peek (the listener): True when a proposal for the end this session holds
+    waits to be shown, marking nothing."""
     try:
         out = []
         for l in proposals() if rec and rec.get("repo") else []:
@@ -6080,6 +6090,10 @@ def proposal_notes(rec):
                 continue  # its proposer left its end: the proposal is void and closes on that machine
             mine = rec.get("role") == other["role"]
             if not mine and (rec.get("role") or role_holder(other["repo"], other["role"])):
+                continue
+            if peek:
+                if mine and told(rec, l, "told-proposal", peek=True):
+                    return True
                 continue
             if not told(rec, l, "told-proposal"):
                 continue
@@ -6102,6 +6116,126 @@ def proposal_notes(rec):
     except Exception as e:
         log_error("proposal_notes", e)
         return ""
+
+
+# ---------- the listener: waking an idle session ----------
+# Hooks run only while a session works, so an idle one never sees the task, proposal or link sent to it. Each Stop
+# starts `switchboard wait` as an async hook with asyncRewake (hooks/hooks.json): it looks at the board every
+# WAIT_POLL seconds, reading only, and when work for this session arrives it builds the notes a prompt would show,
+# marks them shown the same way, writes them on stderr and exits 2. Claude Code then wakes the session with that
+# text. One waiter per Claude process: STATE/claude/wait-<pid>.json names the newest, and an older one exits at its
+# next look. Watched files, holds, cross-repo writes and binds never wake a session; they wait for its next prompt.
+
+# Claude Code ends a waiter at its timeout without waking the session, so the waiter wakes it WAIT_MARGIN seconds
+# before, to re-arm. WAIT_TIMEOUT is the timeout hooks/hooks.json gives the waiter, kept equal to it (40-wake checks)
+WAIT_TIMEOUT, WAIT_MARGIN = 3600, 60
+WAIT_POLL = 2  # seconds between the waiter's looks at the board
+WAKE_CAP = 12  # wakes per Claude process per hour; past that the waiter exits and the work waits for a prompt
+_WAKING = [False]  # set while the waiter marks notes shown and writes them: a SIGTERM then must not lose them
+
+
+def wakes_for(e, rec, sid):
+    """True when change event e concerns this session: a task it requested (by its address, or by its seat when it
+    held no role), works on or watches, or a link with an end it holds. Other kinds never wake it."""
+    held = lambda end: bool(rec.get("role")) and isinstance(end, dict) and \
+        (end.get("repo"), end.get("role")) == (rec.get("repo"), rec.get("role"))
+    kind, target = e.get("kind"), str(e.get("target") or "")
+    if kind == "task" and target.startswith("task:"):
+        d = task_dir(target[5:])
+        req = (record(d / "000-request.json", *TASK_FIELDS["request"]) if d else None) or {}
+        s = req.get("seat") if isinstance(req.get("seat"), dict) else {}
+        return held(req.get("requester")) or held(req.get("worker")) or any(map(held, req.get("watchers") or [])) \
+            or req.get("session") == sid or bool(s) and (s.get("machine"), str(s.get("pid")), s.get("procStart")) == seat(rec)
+    if kind == "link" and re.fullmatch(r"link:l[0-9a-f]+", target):
+        l = load(BOARD / "links" / (target[5:] + ".json"), None)
+        return isinstance(l, dict) and (held(l.get("from")) or held(l.get("to")))
+    return False
+
+
+def work_waiting(session, rec, passed):
+    """The waiter's look, marking nothing: True when a prompt now would show this session a first task note for the
+    role it holds, a proposal for the end it holds, the note that it is bound to a link, or an event wakes_for passes.
+    passed holds the event files already read that do not concern it; each is read once."""
+    if _task_notes(session, rec, peek=True) or proposal_notes(rec, peek=True):
+        return True
+    for l in links():
+        if any(rec.get("role") and (e["repo"], e["role"]) == (rec["repo"], rec["role"]) for e in (l["from"], l["to"])) \
+                and agent_party(l, rec) and told(rec, l, peek=True):
+            return True
+    sid, rid = session["session_id"], session["repo"]
+    seen = set(load(STATE / "seen" / (slug(sid) + ".json"), []))
+    for f in sorted((BOARD / "events").glob("*.json")):
+        if f.name in passed:
+            continue
+        e = record(f, EVENT_FIELDS, EVENT_FIELDS)
+        if not e:
+            continue  # read again next time: git may have created it and not yet written it
+        if e["expires"] > now() and e["id"] not in seen and e["observer"].get("session") != sid \
+                and (rid in e["affects"] or "all" in e["affects"]) and wakes_for(e, rec, sid):
+            return True
+        passed.add(f.name)
+    return False
+
+
+def wait():
+    """switchboard wait: the listener, run by the async Stop hook. Exits 2 with the notes on stderr when work for this
+    session arrives, and once, WAIT_MARGIN before its timeout, with a line asking the session to end its turn so the
+    next Stop starts a fresh waiter. Exits 0 in every other case, with no output: superseded, its Claude process gone,
+    the wake cap reached, SIGTERM, switchboard off, a subagent, a session outside any repo. main() logs an error and
+    exits 0, so a broken board never wakes a session."""
+    global T0
+    signal.signal(signal.SIGTERM, lambda *_: None if _WAKING[0] else os._exit(0))
+    try:
+        data = json.loads(sys.stdin.read() or "{}")
+    except Exception:
+        data = {}
+    if board_env("OFF") or data.get("agent_id") or not data.get("session_id"):
+        return
+    cwd = data.get("cwd") or os.getcwd()
+    session = {"session_id": data["session_id"], "cwd": cwd, "repo": repo_of(cwd)[0]}
+    proc = remember_process(session) if session["repo"] else None
+    if not proc:
+        return
+    pid, ps, claim = proc["pid"], proc["procStart"], PROCS / ("wait-%d.json" % proc["pid"])
+    c = load(claim, {})
+    wakes = c.get("wakes") if isinstance(c, dict) and c.get("procStart") == ps and isinstance(c.get("wakes"), list) else []
+    # keyed by the process, not the session id, which a clear changes; prune_processes drops it with the process
+    save(claim, {"pid": pid, "procStart": ps, "waiter": os.getpid(), "wakes": wakes})
+    limit = float(board_env("WAIT_TIMEOUT") or WAIT_TIMEOUT) if board_env("ALLOW_TMP") else WAIT_TIMEOUT
+    rearm, passed = time.monotonic() + limit - min(WAIT_MARGIN, limit / 2), set()
+    while True:
+        _PS.clear()  # liveness, this process's and the role holders', is read fresh at each look
+        if _proc_start(pid) != ps:
+            return
+        c = load(claim, {})
+        if not isinstance(c, dict) or c.get("waiter") != os.getpid():
+            return  # a newer waiter took over
+        cur = claude_session(pid=pid)
+        new = bool(cur) and cur["sessionId"] != session["session_id"]
+        if new:  # a clear: no Stop comes, so this waiter goes on for the new session id. Its SessionStart shows what
+            session["session_id"], passed = cur["sessionId"], set()  # waits; the first look for it is the next one
+        rec = None if new else me(session)
+        if rec and work_waiting(session, rec, passed):
+            wakes = [t for t in c.get("wakes") or [] if type(t) in (int, float) and time.time() - t < 3600]
+            if len(wakes) >= WAKE_CAP:
+                return log_error("wait", "%d wakes in the last hour for Claude process %d; this waiter stops and the "
+                                 "work waits for the session's next prompt" % (len(wakes), pid))
+            _WAKING[0], T0, _TREE_LEFT[0] = True, time.monotonic(), TREE_WAIT  # the budgets a hook has from its start
+            text = "\n".join(x for x in (safe(task_notes, session, rec), safe(link_notes, rec), safe(proposal_notes, rec),
+                                         safe(deliver, session)) if x)
+            if text:
+                sys.stderr.write("switchboard woke this session: work for it arrived while it was idle. Act on the "
+                                 "notes below as you would at a prompt.\n%s\n" % text)
+                sys.stderr.flush()
+                safe(save, claim, dict(c, wakes=wakes + [time.time()]))
+                sys.exit(2)
+            _WAKING[0] = False
+        if time.monotonic() >= rearm:
+            print("switchboard is re-arming its listener for this session. Nothing new arrived; end your turn now "
+                  "without doing anything.", file=sys.stderr)
+            sys.exit(2)
+        safe(pull_due)  # with a remote, at most one sync job a minute per machine brings another machine's work
+        time.sleep(WAIT_POLL)
 
 
 # ---------- hook entry ----------
@@ -6295,7 +6429,7 @@ def config_faults(cmd):
     """The faults of a usable config file's fields, logged once per version of the file; a CLI command also says them
     on stderr, a hook never in its output."""
     bad_record(CONFIG_FILE, "; ".join(CONFIG_FAULTS))
-    if cmd != "hook":
+    if cmd not in ("hook", "wait"):
         print("switchboard: %s: %s. Those fields are ignored." % (CONFIG_FILE, "; ".join(CONFIG_FAULTS)),
               file=sys.stderr)
 
@@ -6341,7 +6475,7 @@ def config_broken(cmd):
                CONFIG_FILE, "; ".join(CONFIG_FAULTS), tilde(HOME / ".local/share/switchboard")))
     if cmd == "prepush":  # the pre-push hook goes on to the hook it chained; a push is not refused for this
         return print("switchboard: %s. This push was not checked against holds." % why, file=sys.stderr)
-    if cmd != "hook":
+    if cmd not in ("hook", "wait"):
         sys.exit("switchboard: %s. Nothing was run." % why)
     try:
         if json.loads(sys.stdin.read() or "{}").get("hook_event_name") != "SessionStart" or not config_mark():
@@ -6404,6 +6538,7 @@ def main():
     ap = argparse.ArgumentParser(prog="switchboard")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("hook")
+    sub.add_parser("wait")  # the listener the async Stop hook runs
     sub.add_parser("detect")
     sub.add_parser("discover")
     sub.add_parser("archive")
@@ -6473,6 +6608,11 @@ def main():
             hook()
         except Exception as e:  # a broken board must never break a session
             log_error("hook", e)
+    elif a.cmd == "wait":
+        try:
+            wait()
+        except Exception as e:  # never exit 2 on an error: that would wake the session for nothing
+            log_error("wait", e)
     elif a.cmd == "detect":
         detect({"session_id": "cli", "repo": repo_of(os.getcwd())[0]})
     elif a.cmd == "discover":

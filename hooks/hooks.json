@@ -1,5 +1,5 @@
 {
-  "description": "switchboard hooks. Each runs the plugin's own copy of the CLI, ${CLAUDE_PLUGIN_ROOT}/bin/switchboard. Each SessionStart points the state dir's cli link at it: the merge drivers and pre-push hooks run that link, a path no plugin update moves.",
+  "description": "switchboard hooks. Each runs the plugin's own copy of the CLI, ${CLAUDE_PLUGIN_ROOT}/bin/switchboard. Each SessionStart points the state dir's cli link at it: the merge drivers and pre-push hooks run that link, a path no plugin update moves. The second Stop hook, wait, runs in the background and wakes the session when work for it arrives while it is idle.",
   "hooks": {
     "SessionStart": [
       {
@@ -42,6 +42,13 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/switchboard\" hook",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/switchboard\" wait",
+            "async": true,
+            "asyncRewake": true,
+            "timeout": 3600
           }
         ]
       }
