@@ -8,7 +8,11 @@ It is a Claude Code plugin: hooks, one Python CLI, a skill and four slash comman
 
 ## What switchboard is for
 
-Sessions get a few small pieces: notes about changes made elsewhere, holds that freeze a path, roles that give a session an address, links that say who may direct whom, and tasks that wait at an address until someone serves them. You use them by talking to your sessions. The plugin's skill teaches each session the commands, so beyond `/switchboard:init` there is nothing new to learn.
+Each Claude Code session works in its own repo with its own context. It doesn't hear what another session just changed, it has no lasting address for the session that could answer its question, and it can't hand off work and pick up the result later. Once you run several sessions at once, in different repos or on different machines, you end up doing that for them: relaying questions and answers, checking who has finished, and keeping two sessions from editing the same code.
+
+switchboard lets the sessions do it themselves. Notes tell each session about changes made elsewhere, holds keep every session off a path you have frozen, and links and tasks let one session ask another for an answer or a piece of work and get the result back. You direct the work, and the sessions carry the messages.
+
+You use it by talking to your sessions. The plugin's skill teaches each session the commands, so beyond `/switchboard:init` there is nothing new to learn.
 
 A few examples from everyday development follow. They are only a small sample, and the same pieces combine into far more setups than these.
 
