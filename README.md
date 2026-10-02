@@ -8,6 +8,8 @@ It is a Claude Code plugin: hooks, one Python CLI, a skill and four slash comman
 
 switchboard gives sessions a few small pieces: notes about changes made elsewhere, holds that freeze a path, roles that give a session an address, links that say who may direct whom, and tasks that wait at an address until someone serves them. Most uses combine several of them, and the board doesn't care whether the thing serving a task is a Claude session, a script or another tool.
 
+You use it by talking to your sessions. The plugin's skill teaches each session the commands and what every note means, so beyond `/switchboard:init` there is nothing new to learn.
+
 **Two repos that move together.** You change the API schema in one session. The next prompt in the web repo's session carries a note naming the file and the time, so it regenerates the client before it builds on the old one.
 
 **A migration nobody should touch.** Hold `src/auth` for two days with a reason. Every session on every machine has its edits there refused, and the pre-push check refuses pushes whose commits touch it.
@@ -90,6 +92,19 @@ A repo joins the board when a session starts in it. `switchboard register <path>
 To put your name in the notes and pick the machine's name, run `/switchboard:init` in a session. It asks for both, then writes `~/.config/switchboard/config.json`, makes the board folder a local git repo and makes a signing key for this machine (`~/.ssh/switchboard_<machine>`). From a session it also prints a command that adds the key to `keys/allowed_signers`, the list of machines whose signed task requests are trusted; run that yourself in a terminal, since no Claude session writes that file. Run as `switchboard init` from a terminal on a board it has just made, init writes that line itself and prints no command. `switchboard paths` shows every value and where it came from.
 
 ## Using switchboard
+
+Most of the time you don't run these commands yourself. You say what you want in a session, and the session runs switchboard for you. For example:
+
+- "Link with the web session and ask it to regenerate the client from the new schema." The session proposes a link with that scope and, once the web session accepts it, sends the task. The web session's report comes back as a note.
+- "Freeze src/auth until Friday, we're migrating it." The session places a hold with that reason, and edits there are refused in every session.
+- "Tell me when the API's release branches move." The session sets a watch, and the note arrives in this repo's sessions.
+- "What's on the board?" The session shows the live sessions, their roles, the open tasks and the holds.
+- "Hand the test matrix to the server and tell me when it's done." The session sends a task to the server's worker address, and you hear at its next prompt when the task's state changes.
+- "Take the reviewer role in this repo." Work sent to that address now reaches this session.
+
+The other session accepts a link when its scope fits the work it is doing, or when you tell it to. A few acts stay with you whatever you say in chat: a link longer than 24 hours, extending a link or raising its cap, choosing which session gets a link's end, and adding a machine's line to `keys/allowed_signers`. For those the session gives you the command to run in a terminal. Taking over a role that another live session holds needs your word in that session. Chat works best with your sessions in bypass permissions (see [Permission modes](#permission-modes)).
+
+The commands below are what the sessions run. You'd use them yourself in scripts, workers or a terminal.
 
 Watch something, and sessions in the watching repo hear when it changes:
 
