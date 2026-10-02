@@ -181,8 +181,9 @@ out=$(sb "$HB" init --join "$T/board.git" --owner Ann --machine beta-box); cmd=$
   && [ -f "$HB/.ssh/switchboard_beta-box" ] && echo "$out" | has "This machine cannot vouch for itself" \
   && echo "$cmd" | has -F "mkdir -p keys && printf '%s\n' 'beta-box namespaces=" \
   && echo "$cmd" | has -F ">> keys/allowed_signers && git add keys/allowed_signers && git commit -q -m 'switchboard: key for beta-box' -- keys/allowed_signers && git push -q" \
-  && echo "$out" | has "^Note: this board holds 2 record(s) written under the machine name $HOST (registry, sessions)\. They stay under that name" \
-  && ok "init --join clones into the board a session start made, keeps its records (and says they stay under the hostname's name), makes the key and prints the line for the first machine" \
+  && echo "$out" | has -x "  records  moved from the machine name $HOST to beta-box: registry 1, sessions 1" \
+  && ls "$BB"/sessions/beta-box-BS.json >/dev/null && ! ls "$BB"/sessions/"$HOST"-*.json >/dev/null 2>&1 \
+  && ok "init --join clones into the board a session start made, keeps its records (moved from the hostname's name, and says so), makes the key and prints the line for the first machine" \
   || die "join: $out"
 # the joined machine's sessions cannot vouch for it either: no route writes its line
 claude KB; seated "$HB" KB; n=$(git -C "$BB" rev-list --count HEAD); routes "$HB" "$BB" KB beta

@@ -468,9 +468,23 @@ def repo_of(path):
         m = re.sub(r"^(git@|https://|ssh://git@)", "", url).replace(":", "/")
         rid = re.sub(r"\.git$", "", m).lower()
     else:
-        # no remote yet: a local id without ':' so targets can still carry a relative path
-        rid = "local-%s-%s-%s" % (MACHINE, slug(root.name), hashlib.sha256(str(root).encode()).hexdigest()[:6])
+        # no remote yet: a local id without ':' so targets can still carry a relative path. Once registered it keeps
+        # the id its record has: the id names the machine, and a machine renamed later keeps its roles, holds and tasks
+        rid = local_ids().get(str(root).replace(str(HOME), "~", 1)) or \
+            "local-%s-%s-%s" % (MACHINE, slug(root.name), hashlib.sha256(str(root).encode()).hexdigest()[:6])
     return rid, root
+
+
+_LOCAL = []
+
+
+def local_ids():
+    """root as the registry writes it -> local id, from this machine's registry records. Once per process."""
+    if not _LOCAL:
+        recs = (load(f, None) for f in (BOARD / "registry").glob("*.%s.json" % MACHINE))
+        _LOCAL.append({r["root"]: r["id"] for r in recs if isinstance(r, dict) and isinstance(r.get("root"), str)
+                       and isinstance(r.get("id"), str) and r["id"].startswith("local-")})
+    return _LOCAL[0]
 
 
 def registry():
@@ -3075,6 +3089,72 @@ def key_command(line, machine, b=None, push=False):
                                                                       " && %spush -q" % g if push else ""))
 
 
+def move_machine(b, old, new):
+    """init with a new machine name: this machine's records on board b move from old to new, so its sessions keep
+    their roles, links, holds and watches without a new start. Registry records and auto watches are renamed as they
+    are (a record a hook wrote meanwhile for the same root under a new id goes: the old id stands); session, machine
+    and cursor records are renamed with their machine field (a record a hook already wrote under new stands); role and
+    link records, and abs: targets of holds and watches, get the new name in place. Task requests and transitions are
+    written once and keep the name they were written under. {folder: count}; None when keys/allowed_signers names old
+    with a key this machine does not have: that name is another machine's."""
+    if signer_line(b, old) and not any((HOME / ".ssh" / ("%s_%s" % (k, old))).exists()
+                                       for k in ("switchboard", "agent-board")):
+        return None
+    n = collections.Counter()
+    at = lambda d, k: isinstance(d.get(k), dict) and d[k].get("machine") == old
+    with tree_write(b / "registry"):
+        for f in sorted((b / "registry").glob("*.%s.json" % old)):
+            to, root = f.with_name(f.name[:-len(old) - 5] + new + ".json"), load(f, {}).get("root")
+            for o in (b / "registry").glob("*.%s.json" % new):  # registered under a new id meanwhile: the old id stands
+                if o != to and load(o, {}).get("root") == root:
+                    o.unlink()
+            os.replace(f, to)
+            n["registry"] += 1
+        for f in sorted((b / "subs").glob("*.auto.%s.json" % old)):
+            os.replace(f, f.with_name(f.name[:-len(old) - 5] + new + ".json"))
+            n["subs"] += 1
+        for folder, pat, to in (("sessions", "%s-*.json" % old, lambda f: new + f.name[len(old):]),
+                                ("machines", "%s.json" % old, lambda f: new + ".json"),
+                                ("tasks", "*/cursor-%s.json" % old, lambda f: "cursor-%s.json" % new)):
+            for f in sorted((b / folder).glob(pat)):
+                d = load(f, None)
+                if not isinstance(d, dict) or d.get("machine") != old:
+                    continue  # another machine's record whose name starts with old and a dash
+                if not f.with_name(to(f)).exists():
+                    save(f.with_name(to(f)), dict(d, machine=new))
+                f.unlink()
+                n[folder] += 1
+        for f in sorted((b / "roles").glob("*.json")):
+            d = load(f, None)
+            if isinstance(d, dict) and old in (d.get("machine"), d.get("was_machine")):
+                save(f, dict(d, **{k: new for k in ("machine", "was_machine") if d.get(k) == old}))
+                n["roles"] += 1
+        for f in sorted((b / "links").glob("*.json")):
+            d = load(f, None)
+            d = d if isinstance(d, dict) else {}
+            e = {k: dict(d[k], machine=new) for k in ("proposed_by", "accepted_by", "declined_by") if at(d, k)}
+            e.update({"machine": new} if d.get("machine") == old else {})
+            if e:
+                save(f, dict(d, **e))
+                n["links"] += 1
+        # a path outside any repo and outside HOME names its machine (portable)
+        abs_old = lambda t: "abs:%s:%s" % (new, t[len(old) + 5:]) if isinstance(t, str) and t.startswith("abs:%s:" % old) \
+            else t
+        for f in sorted((b / "holds").glob("*.json")):
+            d = load(f, None)
+            if isinstance(d, dict) and abs_old(d.get("path")) != d.get("path"):
+                save(f, dict(d, path=abs_old(d["path"])))
+                n["holds"] += 1
+        for f in sorted((b / "subs").glob("*.manual.json")):
+            d = load(f, None)
+            ws = d.get("watches") if isinstance(d, dict) else None
+            moves = lambda w: isinstance(w, dict) and abs_old(w.get("target")) != w.get("target")
+            if isinstance(ws, list) and any(map(moves, ws)):
+                save(f, dict(d, watches=[dict(w, target=abs_old(w["target"])) if moves(w) else w for w in ws]))
+                n["subs"] += 1
+    return n
+
+
 def init(a):
     """switchboard init [--owner N] [--machine N] [--scan DIR]... [--board DIR] [--update] [--join URL]; init --remote
     URL; init --always-on [--remove]. Says what it did and what comes next."""
@@ -3135,6 +3215,9 @@ def init(a):
         with open(b / "keys/allowed_signers", "a") as f:
             f.write(line + "\n")
         signers = "wrote this machine's line to keys/allowed_signers"
+    # this machine's records under its old name: in the first commit below when there is one, otherwise sync commits
+    # the move as it commits every record write
+    moved = move_machine(b, MACHINE, m) if m != MACHINE else {}
     # a first commit, which --remote can push; it holds keys/, which sync never commits
     err = board_commit(b, "switchboard: init %s" % m) if not git(b, "rev-parse", "-q", "--verify", "HEAD") else ""
     remote = has_remote(b)
@@ -3150,16 +3233,16 @@ def init(a):
     print("  state    %s" % tilde(s))
     print("  key      %s" % ("%s (%s)" % (tilde(key), "made now" if kmade else "there already") if key else "none"))
     print("  signers  %s" % signers)
+    if moved:
+        print("  records  moved from the machine name %s to %s: %s" % (MACHINE, m, ", ".join(
+            "%s %d" % (k, v) for k, v in sorted(moved.items()))))
+    elif moved is None:
+        print("  records  left under %s: keys/allowed_signers has that name with a key this machine does not have, so "
+              "they are another machine's" % MACHINE)
     if err:
         print("  commit   failed: %s" % err)
     if todo:
         print(todo)
-    old = [f for f in [*(b / "registry").glob("*.%s.json" % MACHINE), *(b / "sessions").glob("%s-*.json" % MACHINE),
-                       b / "machines" / ("%s.json" % MACHINE)] if f.exists()] if m != MACHINE else []
-    if old:
-        print("Note: this board holds %d record(s) written under the machine name %s (%s). They stay under that name: "
-              "sessions here register and publish as %s from their next start." % (
-                  len(old), MACHINE, ", ".join(sorted({f.parent.name for f in old})), m))
     if not any(os.path.realpath(x) == os.path.realpath(BIN_LINK.parent) for x in os.environ.get("PATH", "").split(":") if x):
         print("%s is not on your PATH, so a terminal does not find `switchboard`, the link a session start makes there. "
               "Add it in your shell's profile (~/.bashrc, ~/.zshrc): export PATH=\"$HOME/.local/bin:$PATH\"" % tilde(BIN_LINK.parent))
@@ -4426,7 +4509,8 @@ def task_end(spec, reg):
         sys.exit("switchboard: use <repo>:<role>, got %r. Nothing was written." % (spec or ""))
     rid = find_repo(name, reg)
     if not rid or rid not in {load(f, {}).get("id") for f in (BOARD / "registry").glob("*.json")}:
-        sys.exit("switchboard: repo %r is not registered on any machine. Nothing was written." % name)
+        sys.exit("switchboard: %s Nothing was written." % (elsewhere(name) or
+                                                           "repo %r is not registered on any machine." % name))
     return {"repo": rid, "role": role}
 
 
@@ -5335,6 +5419,17 @@ def find_repo(name, reg):
     known = {load(f, {}).get("id") for f in (BOARD / "registry").glob("*.json")}
     hits = [k for k in known if k and name in (k, k.rsplit("/", 1)[-1])]
     return hits[0] if hits else (repo_of(os.path.expanduser(name))[0] if os.path.exists(os.path.expanduser(name)) else None)
+
+
+def elsewhere(name):
+    """For a repo name find_repo does not find: where the board has a repo of that name under other machine names, as
+    a sentence, or ''. A repo with no remote is found by its name only on its own machine; elsewhere (or under a name
+    this machine had before its config file was edited) its id finds it."""
+    hits = sorted({(f.name.rsplit(".", 2)[-2], r["id"]) for f in (BOARD / "registry").glob("*.json")
+                   for r in [load(f, None)] if isinstance(r, dict) and isinstance(r.get("id"), str)
+                   and name == r.get("name") and not f.name.endswith(".%s.json" % MACHINE)})
+    return ("repo %r is not registered under this machine's name, %s; the board has it under the machine name %s. Name "
+            "it by that id to reach it there." % (name, MACHINE, ", ".join("%s as %s" % h for h in hits))) if hits else ""
 
 
 def rname(rid):
@@ -6488,7 +6583,8 @@ def main():
     elif a.cmd == "register":
         print(register(a.path, quiet=False) or "not a registrable repo")
     elif a.cmd == "read":
-        rid = (find_repo(a.repo, registry()) or sys.exit("switchboard: unknown repo %r" % a.repo)) if a.repo else repo_of(os.getcwd())[0]
+        rid = (find_repo(a.repo, registry()) or sys.exit("switchboard: " + (elsewhere(a.repo) or "unknown repo %r" % a.repo))) \
+            if a.repo else repo_of(os.getcwd())[0]
         for e in live_events():
             if not rid or rid in e["affects"] or "all" in e["affects"]:
                 print("%s %-7s %s -> %s" % (iso(e["ts"]), e["machine"], e["summary"], ",".join(e["affects"])))
@@ -6578,7 +6674,7 @@ def main():
         ends = []
         for spec in (a.src, a.dst):
             name, _, role = spec.rpartition(":")
-            rid = find_repo(name, reg) or sys.exit("switchboard: unknown repo %r" % name)
+            rid = find_repo(name, reg) or sys.exit("switchboard: " + (elsewhere(name) or "unknown repo %r" % name))
             role or sys.exit("switchboard: use <repo>:<role>")
             ends.append({"repo": rid, "role": role})
         # two links between the same ends in one second must not share an id (seen in the self-test 2026-09-23)
