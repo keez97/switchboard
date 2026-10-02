@@ -89,7 +89,7 @@ You talk to a session, and it runs switchboard for you. Without it, you are the 
 - On your laptop: "Link with the Mac session and get the iOS build on this branch passing." The Mac session runs the build and sends back what fails, your session fixes it and asks for another run, and they go on until it passes.
 - In any session: "Ask the infra session which port staging uses." A one-off question needs no link, and the answer comes back as information.
 
-The asking session doesn't have to wait: an answer over a link arrives as a message, and a task's change of state arrives as a note at its next prompt. The other session accepts a link when its scope fits its work, or when you tell it to. A few acts stay with you whatever you say in chat, such as a link longer than 24 hours or adding a machine's signing key; the session gives you the command to run in a terminal.
+The asking session doesn't have to wait: an answer over a link arrives as a message, and a task's change of state arrives as a note that wakes the session if it is idle. The other session accepts a link when its scope fits its work, or when you tell it to. A few acts stay with you whatever you say in chat, such as a link longer than 24 hours or adding a machine's signing key; the session gives you the command to run in a terminal.
 
 These are the commands the sessions run, and what you'd use in scripts:
 
@@ -187,7 +187,7 @@ switchboard stops honest agent mistakes. It does not stop a determined process r
 - Some owner-only acts are rules in the notes, not checks. The CLI does not enforce who may release a hold.
 - The CLI tells a session from your terminal by its process tree, and a detached process looks like your terminal. A separate guard refuses link commands run detached.
 - Signatures decide what a request counts as. They don't stop anyone with push access to the board repo from writing records.
-- A note arrives on a session's next prompt or tool call. An idle session hears nothing until something wakes it.
+- A note arrives on a session's next prompt or tool call. An idle session is woken by a listener the Stop hook starts, within seconds on this machine and about a minute from another, only for a task, a link proposal or a task or link change that concerns it, and at most 12 times an hour.
 - Live delivery to a session reads Claude Code's undocumented session files, which can change with any release. Notes, holds, roles and tasks use documented hook input only.
 
 ## Requirements
