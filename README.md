@@ -93,14 +93,17 @@ To put your name in the notes and pick the machine's name, run `/switchboard:ini
 
 ## Using switchboard
 
-Most of the time you don't run these commands yourself. You say what you want in a session, and the session runs switchboard for you. For example:
+Most of the time you don't run these commands yourself. You talk to a session, and it runs switchboard for you.
 
-- "Link with the web session and ask it to regenerate the client from the new schema." The session proposes a link with that scope and, once the web session accepts it, sends the task. The web session's report comes back as a note.
-- "Freeze src/auth until Friday, we're migrating it." The session places a hold with that reason, and edits there are refused in every session.
-- "Tell me when the API's release branches move." The session sets a watch, and the note arrives in this repo's sessions.
-- "What's on the board?" The session shows the live sessions, their roles, the open tasks and the holds.
-- "Hand the test matrix to the server and tell me when it's done." The session sends a task to the server's worker address, and you hear at its next prompt when the task's state changes.
-- "Take the reviewer role in this repo." Work sent to that address now reaches this session.
+Without switchboard, you are the go-between when sessions depend on each other. You copy what one session found into another, check whether the other one has finished, and carry its answer back. With a link between them, the sessions do that themselves:
+
+- In the web session: "Link with the API session. Ask it what the new auth endpoints return, and wait for its answer before you change the client." The web session proposes the link, the API session accepts it, the question goes over, and the answer comes back to the web session, which carries on with it.
+- In a planning session: "Link with the builder in the app repo. Send it the refactor in three tasks, review each one when it reports done, and send the next." The builder works through them and reports each with the commit it made. The planner reviews and sends the next, and you read the outcome in one place.
+- In a builder session: "When you're done, ask the reviewer session to check it and fix what it finds before you push." The two sessions go back and forth over their link until the reviewer has nothing left, and then the builder pushes.
+- On your laptop: "Ask the Mac session to run the iOS build on this branch and tell me if it fails." The request crosses machines through the board, and the result comes back to the session you asked.
+- In any session: "Ask the infra session which port staging uses." A one-off question needs no link. The answer comes back as information.
+
+A session that asks for work doesn't have to sit and wait. An answer sent over the link arrives as a message, and a task's change of state arrives as a note at that session's next prompt.
 
 The other session accepts a link when its scope fits the work it is doing, or when you tell it to. A few acts stay with you whatever you say in chat: a link longer than 24 hours, extending a link or raising its cap, choosing which session gets a link's end, and adding a machine's line to `keys/allowed_signers`. For those the session gives you the command to run in a terminal. Taking over a role that another live session holds needs your word in that session. Chat works best with your sessions in bypass permissions (see [Permission modes](#permission-modes)).
 
