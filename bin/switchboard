@@ -6223,7 +6223,7 @@ def proposal_notes(rec, peek=False):
 
 # Claude Code ends a waiter at its timeout without waking the session, so the waiter wakes it WAIT_MARGIN seconds
 # before, to re-arm. WAIT_TIMEOUT is the timeout hooks/hooks.json gives the waiter, kept equal to it (40-wake checks)
-WAIT_TIMEOUT, WAIT_MARGIN = 3600, 60
+WAIT_TIMEOUT, WAIT_MARGIN = 86400, 60
 WAIT_POLL = 2  # seconds between the waiter's looks at the board
 WAKE_CAP = 12  # wakes per Claude process per hour; past that the waiter exits and the work waits for a prompt
 _WAKING = [False]  # set while the waiter marks notes shown and writes them: a SIGTERM then must not lose them

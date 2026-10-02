@@ -48,7 +48,7 @@
             "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/switchboard\" wait",
             "async": true,
             "asyncRewake": true,
-            "timeout": 3600
+            "timeout": 86400
           }
         ]
       }
