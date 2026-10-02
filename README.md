@@ -4,7 +4,29 @@ switchboard coordinates Claude Code sessions. When you run several sessions at o
 
 It is a Claude Code plugin: hooks, one Python CLI, a skill and four slash commands. The board is a folder of JSON files. Across machines that folder is a git repo you own. There is no server.
 
-It stops honest agent mistakes. It does not stop a determined process running as you: the guards read command text, and a script file or a path built at run time gets past them. [Limits](#limits) lists what it does and doesn't enforce.
+## What it's for
+
+switchboard gives sessions a few small pieces: notes about changes made elsewhere, holds that freeze a path, roles that give a session an address, links that say who may direct whom, and tasks that wait at an address until someone serves them. Most uses combine several of them, and the board doesn't care whether the thing serving a task is a Claude session, a script or another tool.
+
+**Two repos that move together.** You change the API schema in one session. The next prompt in the web repo's session carries a note naming the file and the time, so it regenerates the client before it builds on the old one.
+
+**A migration nobody should touch.** Hold `src/auth` for two days with a reason. Every session on every machine has its edits there refused, and the pre-push check refuses pushes whose commits touch it.
+
+**A team of sessions.** One session plans and others build, each in its own repo or worktree. The planner links to each builder with a scope, sends each a series of tasks, and ties them together with `--parent` so a large job stays one tree. As builders record `working`, `input-required` or `completed`, the planner hears about it at its next prompt. A reviewer session on its own link can be sent each finished piece. Tasks wait at an address, not in a session, so a session started tomorrow that takes a builder's role finds that builder's open work.
+
+**Work that runs while you're away.** A session on your laptop requests a long job, such as an evaluation run or a full test matrix, at an address that a script on a server serves. The script picks it up with no Claude session open, records `working`, runs for hours and records `completed` with references to the commits it made. The next session you open in the requesting repo finds the result in its first note. `init --always-on` keeps the server's board current while nobody is logged in.
+
+**Work that needs a particular machine.** An iOS build needs the Mac and a GPU job needs the server. Give the session or script on that machine a role and every other machine can hand it work through the board. Requests between machines are signed, so the worker can tell a request it can trust from one it should treat as information.
+
+**A change that ripples through many repos.** Upgrading a shared library: watch its release branches from every repo that depends on it, hold the dependents while the new version lands, then send each dependent's session a task over a link to move to it. Each one reports back, and `switchboard tasks` shows which have finished.
+
+**Decisions that need you.** A task can stop in `input-required` with `--waiting-on` set to you. The worker is reminded of it, the requester sees what it waits on, and every other session keeps going.
+
+**Your own harness.** An orchestrator that starts headless sessions, gives each a role and feeds them tasks; a dashboard over the board folder; a CI job that files a task when a build breaks; a scheduler that sends work to whichever machine is free. switchboard supplies the addresses and says who may ask what. The policy is yours.
+
+## Build on it
+
+switchboard is a thin layer, meant to be extended into your own agent setup. The CLI is one Python file with no dependencies. The board is a folder of JSON files, so anything that reads JSON can read it; writes go through the CLI, which checks them. The commands a script needs print JSON (`switchboard task <tid> --json`, `switchboard paths --json`) or one id per line (`switchboard tasks --for <address> --open`). Only the hooks are tied to Claude Code. The record format may still change before 1.0.
 
 ## What a session sees
 
@@ -195,7 +217,9 @@ A file that is there but can't be read as a JSON object, names no `board_dir`, o
 - **Receipts.** `notified` means a session holding the address was shown the task; `seen` means it read it. The requester sees both, per machine.
 - **Signatures.** When a machine has a signing key, every task request it makes is signed with it. `switchboard task request --no-sign` sends one unsigned. `switchboard task <tid>` shows the check against `keys/allowed_signers`: signed by a machine, unsigned, BAD SIGNATURE, or why it could not be verified.
 
-## Limits
+## Safety and limits
+
+This version keeps authority tight on purpose. A link two sessions make runs 24 hours at most, and a session can lower a link's cap but never raise it. A longer link, extending one, raising a cap and the acts the notes reserve for you (deleting or rewriting history, anything public, spending money, secrets, settings and hooks, releases, overriding a hold) stay with you, from a terminal. A request from another machine that does not carry a valid signature is information only, whatever link it names. They are set tight for this first version.
 
 switchboard stops honest agent mistakes. It does not stop a determined process running as you.
 
