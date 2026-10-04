@@ -188,7 +188,7 @@ SWITCHBOARD_SESSION_ID=S1 "$B" unlink "$LW" >/dev/null 2>&1; stopm Stop "$T/alph
 [ -z "$(stopm Stop "$T/beta" S2 "unrelated")" ] && ok "a proposal its proposer withdrew before the holder's Stop does not block the holder" || die "withdrawn proposal blocked"
 LT=$(SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "taken" 2>/dev/null | awk 'NR==1{print $2}')
 hook PostToolUse "$T/beta" S2 Read '{}' | ctx | has "proposes link $LT" || die "setup: S2 did not receive $LT"
-P12=$(fake S12 "$T/beta" beta2); hook SessionStart "$T/beta" S12 >/dev/null; SWITCHBOARD_SESSION_ID=S12 "$B" role implementer --take >/dev/null
+P13=$(fake S13 "$T/beta" beta2); hook SessionStart "$T/beta" S13 >/dev/null; SWITCHBOARD_SESSION_ID=S13 "$B" role implementer --take >/dev/null
 [ -z "$(stopm Stop "$T/beta" S2 "unrelated")" ] && ok "a received proposal whose end another session now holds does not block" || die "taken end blocked"
 
 # ---- errors degrade to no reminder
