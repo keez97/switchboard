@@ -57,6 +57,27 @@ python3 -c "import json,sys; r=json.load(open(sys.argv[1])); r['pid']=int(sys.ar
 under A "\"$B\" who" 2>&1 >/dev/null | has "$WARN" && ok "a record for the same session id naming another process: the warning shows" || die "stale record hid the warning"
 mv "$T/rec.json" "$REC"
 
+# the same session id reopened in a new process (the desktop app reopens a session, claude --resume): the record names
+# the earlier process until a hook in the new one rewrites it, on any event, not only on session start
+ev(){ printf '{"hook_event_name": "%s", "cwd": "%s", "session_id": "sE", "source": "resume", "prompt": "hi", "tool_name": "Read", "tool_input": {}, "tool_use_id": "u1"}' \
+  "$2" "$T/alpha" | python3 "$FC" run "$T/fc-$1.sock" "$T/alpha" "\"$B\" hook" >/dev/null; }
+pid_of(){ python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['pid'])" "$SWITCHBOARD_STATE/claude/sE.json"; }
+E=$(claude E sE); ev E SessionStart; ev E PostToolUse
+[ "$(pid_of)" = "$E" ] && cp "$SWITCHBOARD_STATE/claude/sE.json" "$T/recE.json" || die "setup: no record of E"
+E2=$(claude E2 sE)   # E still runs: two processes, two session files, one session id
+ev E2 SessionStart
+[ "$(pid_of)" = "$E2" ] && ok "two processes run one session id: SessionStart in the second records the second" || die "record pid $(pid_of), want $E2"
+python3 "$FC" quit "$T/fc-E.sock"; rm -f "$HOME/.claude/sessions/$E.json"
+cp "$T/recE.json" "$SWITCHBOARD_STATE/claude/sE.json"
+ev E2 SessionStart
+out=$(under E2 "\"$B\" who" 2>&1 >/dev/null)
+[ -z "$out" ] && [ "$(pid_of)" = "$E2" ] && ok "reopened in a new process, SessionStart: the record names the new process and no warning" || die "resume, SessionStart: pid $(pid_of), want $E2: $out"
+cp "$T/recE.json" "$SWITCHBOARD_STATE/claude/sE.json"
+ev E2 PostToolUse
+out=$(under E2 "\"$B\" who" 2>&1 >/dev/null)
+[ -z "$out" ] && [ "$(pid_of)" = "$E2" ] && ok "reopened, plugins reloaded mid-session, PostToolUse alone: the record names the new process and no warning" || die "resume, PostToolUse: pid $(pid_of), want $E2: $out"
+python3 "$FC" quit "$T/fc-E2.sock"
+
 # the desktop app's copy: --plugin-dir names a switchboard plugin with no hooks/hooks.json
 claude B sB --model x --plugin-dir "$T/other" --plugin-dir "$T/inline" >/dev/null
 under B "\"$B\" who" 2>&1 >/dev/null | has "$WARN Cause: $T/inline has no hooks/hooks\.json\.$" && ok "--plugin-dir <dir> with no hooks folder: the warning names it" || die "cause: $(under B "\"$B\" who" 2>&1 >/dev/null)"

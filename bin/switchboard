@@ -4095,10 +4095,30 @@ def hook_process():
     return None
 
 
+_UP = {}
+
+
+def above(pid):
+    """True when pid is the parent of this process or an earlier ancestor. Walks up only as far as it must (a hook
+    is the child of a shell Claude Code starts, so one or two steps); one walk per pid per run."""
+    if pid not in _UP:
+        p, hit = os.getppid(), False
+        for _ in range(12):
+            if p <= 1:
+                break
+            if p == pid:
+                hit = True
+                break
+            p = parent(p)[0]
+        _UP[pid] = hit
+    return _UP[pid]
+
+
 def remember_process(session, recheck=False):
-    """Hook side: record which process runs this session, once per session id. The session file, when there is one,
-    names the process exactly and wins over a walk; a record made by a walk looks for the file again on recheck
-    (session start and each prompt). Returns the record or None; never raises."""
+    """Hook side: record which process runs this session. The session file, when there is one, names the process
+    exactly and wins over a walk; a record made by a walk looks for the file again on recheck (session start and each
+    prompt). A record whose process is not the one this hook runs under (the same session id reopened in a new
+    process: the desktop app, claude --resume) is rewritten on any event. Returns the record or None; never raises."""
     sid = session.get("session_id")
     if not sid:
         return None
@@ -4106,9 +4126,17 @@ def remember_process(session, recheck=False):
         f = PROCS / (slug(sid) + ".json")
         rec = load(f, None)
         rec = rec if isinstance(rec, dict) and rec.get("pid") else None
+        # a test that asks for no walk runs its hooks straight from the test shell: no process above them to match
+        walk = not (board_env("ALLOW_TMP") and board_env("NOWALK"))
+        if rec and walk and not (above(int(rec["pid"])) and
+                                 (not rec.get("procStart") or rec["procStart"] == proc_start(rec["pid"]))):
+            rec = None  # an earlier process of this session id: this one is recorded below
         if rec and (rec.get("via") == "file" or not recheck):
-            return rec  # the hot path: one small read
+            return rec  # the hot path: one small read and, on Linux, one or two of /proc
         d = session_file(sid=sid)
+        if d and walk and not above(d["pid"]):  # two processes run this session id: the file of the one above this hook
+            hp = hook_process()
+            d = session_file(sid=sid, pid=hp) if hp else None
         pid = d["pid"] if d else (rec or {}).get("pid") or hook_process()
         if rec and rec.get("pid") == pid and (not d or rec.get("via") == "file"):
             return rec
