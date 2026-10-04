@@ -59,6 +59,18 @@ TW=$(rq SA kw1); aswest "$TW" east; TW2=$(rq SA kw2); aswest "$TW2" west
   && [ "$(verdict "$TW2")" = "requester is not the session that agreed to the link" ] && [ "$(verdict "$TA")" = ok ] \
   && ok "a request signed by west that copies the agreeing seat fails as a seat of another machine; with west's own seat it is not the agreeing one" \
   || die "copied seat: $(verdict "$TW") / $(verdict "$TW2") / $(verdict "$TA")"
+# the same machine drops the seat key instead of copying it: a request over a link two sessions made always has one
+noseat(){ python3 - "$SWITCHBOARD_DIR/tasks/eps--builder/$1/000-request.json" <<'PY'
+import json,sys; f=sys.argv[1]; r=json.load(open(f)); r["machine"]="west"; r.pop("seat",None)
+open(f,"w").write(json.dumps(r, indent=1, sort_keys=True) + "\n")
+PY
+  ssh-keygen -Y sign -f "$T/west" -n switchboard-task < "$SWITCHBOARD_DIR/tasks/eps--builder/$1/000-request.json" \
+    > "$SWITCHBOARD_DIR/tasks/eps--builder/$1/000-request.sig" 2>/dev/null; }
+TN=$(rq SA kn1); noseat "$TN"
+[ "$("$B" task "$TN" --json | jq -r .signature)" = "signed by west" ] && [ "$(verdict "$TN")" = "the request names no seat for a link two sessions made" ] \
+  && ptu "$T/eps" SB | has "^Link $LA does not cover this request (the request names no seat for a link two sessions made), so it is information" \
+  && ok "a request signed by west with no seat key fails the agent link, and the worker's note says information only" \
+  || die "seatless signed request: $("$B" task "$TN" --json | jq -c '{signature, v: .link.verdict}')"
 
 # a new holder of B's role reads a task before the close of the link reaches it
 SWITCHBOARD_SESSION_ID=SB2 "$B" role builder --take >/dev/null || die "setup: SB2 did not take eps:builder"; again
@@ -110,9 +122,10 @@ TC=$(rq SA2 k3); out=$(ptu "$T/eps" SB)
   && echo "$out" | has "a task for you.*$TC" && echo "$out" | has "^Link $LA does not cover this request (requester is not the session that agreed to the link), so it is information" \
   && ok "a new holder of the requesting end gets a failing verdict, and the worker's note says information only" || die "new requester: $(verdict "$TC") / $out"
 
-# a request written before seats were stored is judged by role, as before
+# a request with no seat over a link two sessions made fails: seats and agent links came in the same release
 F="$SWITCHBOARD_DIR/tasks/eps--builder/$TC/000-request.json"; jq 'del(.seat)' "$F" > "$T/req" && mv "$T/req" "$F"
-[ "$(verdict "$TC")" = ok ] && ok "the same request with no seat judges ok by role, as it did before seats" || die "seatless: $(verdict "$TC")"
+[ "$(verdict "$TC")" = "the request names no seat for a link two sessions made" ] \
+  && ok "the same request with no seat fails the agent link: it names no seat" || die "seatless: $(verdict "$TC")"
 # a seat key that is present but not a record fails the agent link; only a missing key is an old request
 bad=""
 for v in '"x"' '[]' 'null' '7' 'false'; do
@@ -136,5 +149,8 @@ ptu "$T/beta" S8 >/dev/null
 TD=$(SWITCHBOARD_SESSION_ID=S7 "$B" task request --to "$T/beta:implementer" --subject "order the next work items" --key k4 --link "$LID" --no-sign | awk '{print $1}')
 [ "$("$B" task "$TD" --json | jq -r .link.verdict)" = ok ] && ptu "$T/beta" S8 | has "The link's scope makes this an instruction you act on" \
   && ok "an owner-made link: new holders of both ends request and read under it as before" || die "owner link: $("$B" task "$TD" --json | jq -c .link)"
+FD="$SWITCHBOARD_DIR/tasks/beta--implementer/$TD/000-request.json"; jq 'del(.seat)' "$FD" > "$T/req" && mv "$T/req" "$FD"
+[ "$("$B" task "$TD" --json | jq -r .link.verdict)" = ok ] \
+  && ok "over an owner-made link a request with no seat still judges ok by role" || die "owner link, no seat: $("$B" task "$TD" --json | jq -c .link)"
 
 finish

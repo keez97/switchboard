@@ -5136,8 +5136,8 @@ def link_check(req, reader=None, d=None, timeout=20):
     reason. covers is the link's covers list, or COVERS_NONE for a link with none, judged by its scope words, and
     scope_covers_subject is link_covers either way.
     A link two sessions made gives authority to the two seats that agreed to it, never to the next holder of an end:
-    the request's seat must be the one at `from` (a request written before seats were stored is judged by role), and
-    name the machine the request names, so a machine that signs as itself cannot borrow a seat from the link record;
+    the request's seat must be the one at `from` (a request with no seat fails: seats and links two sessions make
+    came in the same release), and name the machine the request names, so a machine that signs as itself cannot borrow a seat from the link record;
     reader, the presence record of a session reading the task as its worker, the one at `to`. Seats compare by
     same_seat: a machine renamed since, under a name keys/allowed_signers gives the same key, is the same machine.
     A seat that is not a record, or a reader task_reader could not determine (READER_UNKNOWN), fails an agent link
@@ -5162,15 +5162,17 @@ def link_check(req, reader=None, d=None, timeout=20):
            "scope_covers_subject": link_covers(l, str(req.get("subject") or ""))}
     ends = [e if isinstance(e, dict) else {} for e in (l.get("from"), l.get("to"))]
     by, at = agent_seat(l, ends[0]), agent_seat(l, ends[1])
-    rs, old = req.get("seat"), "seat" not in req  # old: written before seats, judged by role
+    rs = req.get("seat")
     out["verdict"] = ("link proposed, not accepted" if l.get("state") == "proposed" and not l.get("revoked") else
                       "link revoked" if l.get("revoked") else
                       "link expired" if l.get("until") and l["until"] <= now() else
                       "from is not the requester" if not out["from_is_requester"] else
                       "the request's seat names another machine"
                       if by and isinstance(rs, dict) and rs.get("machine") != req.get("machine") else
+                      # seats and agent links came in one release (0.4.0): no request over one lacks a seat
+                      "the request names no seat for a link two sessions made" if by and "seat" not in req else
                       "requester is not the session that agreed to the link"
-                      if by and not old and (not isinstance(rs, dict) or not same_seat(seat(rs), by)) else
+                      if by and (not isinstance(rs, dict) or not same_seat(seat(rs), by)) else
                       "to is not the worker" if not out["to_is_worker"] else
                       "cannot tell whether this session agreed to the link" if at and reader is READER_UNKNOWN else
                       "this session is not the one that agreed to the link"
