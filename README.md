@@ -176,6 +176,17 @@ A link made before 0.7.0 has no covers list. Its tasks are judged by the words o
 
 A message from the `--from` end arrives with a header telling the receiver it may act within the scope. A task counts as an instruction when the link is live, the requester and worker are its two ends, the link covers the task's subject, and a request from another machine carries a valid signature. Everything else from another session is information, and the note says so.
 
+### Upgrading to 0.7.0
+
+New links need `--covers`, so a script or session that makes links must pass a list. An owner link made before 0.7.0 keeps working until it ends, judged by the whole words of its scope. To give it a list now, make its replacement from a terminal and then end the old one:
+
+```
+switchboard link --from api:backend --to web:frontend --scope "client generation" --covers "client, schema"
+switchboard unlink l5c2a1e
+```
+
+Requests then name the new link's id. Update every machine on the board the same day: until all of them run 0.7.0, a 0.6.0 machine judges a link by its scope and can reach a different verdict on the same task.
+
 ## Workers
 
 A task waits at its address, so a script can serve it. `switchboard tasks --for web:frontend --open` lists the open task ids. For each one, the script, running inside the worker's repo, records `working`, does the work and records `completed` or `failed`. Run the loop as a systemd service or launchd agent and the machine works with no session open. switchboard ships no worker: the loop belongs in the repo that owns the work.
