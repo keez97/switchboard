@@ -76,5 +76,15 @@ s=$(date +%s); out=$(SWITCHBOARD_PULL_EVERY=0 on east "$B" task "$TW" --wait --t
 [ "$rc" = 0 ] && echo "$out" | has "^$TW  completed  from east" && echo "$out" | has "done on west" \
   && ok "a transition recorded on another machine is picked up through pull_due while waiting (${e}s)" || die "two machines: rc $rc after ${e}s: $out"
 wait
+# the machine's pull stamp just refreshed (a hook here pulled) and PULL_EVERY at its default of 60 s: the wait pulls on
+# its own cadence, so west's change, pushed after the wait's first pull, shows within about 10 s
+TV=$(on east "$B" task request --to "$T/wrk:builder" --subject "from east again" --key x2 --no-sign | awk '{print $1}'); syncm east; syncm west
+( python3 -c "import time; time.sleep(3)"; cd "$T/wrk" && on west "$B" task completed "$TV" --note "done on west again" >/dev/null ) & echo $! >> "$T/pids"
+touch "$T/state-east/pull.stamp"
+s=$(date +%s); out=$(on east "$B" task "$TV" --wait --timeout 30 2>&1) && rc=0 || rc=$?; e=$(( $(date +%s) - s ))
+[ "$rc" = 0 ] && [ "$e" -lt 25 ] && echo "$out" | has "done on west again" \
+  && ok "with the pull stamp fresh and PULL_EVERY at its default, the wait pulls on its own cadence and sees another machine's change (${e}s)" \
+  || die "own cadence: rc $rc after ${e}s: $out"
+wait
 
 finish

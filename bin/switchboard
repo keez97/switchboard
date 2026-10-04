@@ -3543,18 +3543,19 @@ def start_sync_job():
 PULL_EVERY = 60  # seconds between the sync jobs a prompt or tool call starts, per machine
 
 
-def pull_due():
+def pull_due(force=False):
     """Mid-turn sync: a prompt or tool call starts the sync job at most once per PULL_EVERY per machine, so a task the
     other machine pushed shows on the next hook event, not only after this session's next Stop. The not-due path is
     one stat; the due path runs one local git (has_remote: a board with no remote starts no job) and no network
-    (sync() would run git config). The override is for tests only."""
+    (sync() would run git config). The override is for tests only. force: due whatever the stamp says (task --wait
+    pulls on a cadence of its own)."""
     if board_env("NOSYNC") or not (BOARD / ".git").exists():
         return
     every = float(board_env("PULL_EVERY") or PULL_EVERY) if board_env("ALLOW_TMP") \
         else PULL_EVERY
     stamp = STATE / "pull.stamp"
     try:  # mtime is wall clock: never now(), which tests move. A stamp ahead of the clock (it was set back) is due
-        if 0 <= time.time() - stamp.stat().st_mtime < every:
+        if not force and 0 <= time.time() - stamp.stat().st_mtime < every:
             return
     except FileNotFoundError:
         pass
@@ -5294,6 +5295,7 @@ def task_wait(a):
     signal.signal(signal.SIGTERM, lambda *_: os._exit(1))
     want = (a.until,) if a.until else TERMINAL
     limit, t0 = TASK_WAIT if a.timeout is None else a.timeout, time.monotonic()
+    pulled = None
     while True:
         st = task_state(task_records(d))
         if st in want:
@@ -5307,7 +5309,11 @@ def task_wait(a):
         left = limit - (time.monotonic() - t0)
         if limit and left <= 0:
             sys.exit("switchboard: task %s is still %s after %gs" % (tid, st, limit))
-        pull_due()  # a change another machine pushed arrives on a later pass
+        # a change another machine pushed arrives on a later pass. The wait pulls every WAIT_PULL s of its own: the
+        # machine's stamp, which any hook here refreshes, would leave it one pull a minute
+        due = pulled is None or time.monotonic() - pulled >= WAIT_PULL
+        pull_due(force=due)
+        pulled = time.monotonic() if due else pulled
         time.sleep(min(WAIT_POLL, left) if limit else WAIT_POLL)
 
 
@@ -6443,6 +6449,7 @@ def proposal_notes(rec, peek=False):
 # before, to re-arm. WAIT_TIMEOUT is the timeout hooks/hooks.json gives the waiter, kept equal to it (40-wake checks)
 WAIT_TIMEOUT, WAIT_MARGIN = 86400, 60
 WAIT_POLL = 2  # seconds between the waiter's looks at the board
+WAIT_PULL = 10  # seconds between the pulls task --wait starts, whatever the machine's pull stamp says
 TASK_WAIT = 90  # task --wait gives up after this many seconds, under the 2 minutes a Bash call has by default
 WAKE_CAP = 12  # wakes per Claude process per hour; past that the waiter exits and the work waits for a prompt
 _WAKING = [False]  # set while the waiter marks notes shown and writes them: a SIGTERM then must not lose them
