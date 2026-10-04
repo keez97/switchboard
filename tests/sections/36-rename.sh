@@ -63,6 +63,8 @@ import json, re, sys
 m, b, tq, lp = open(sys.argv[1]).read(), open(sys.argv[2]).read(), sys.argv[3], sys.argv[4]
 cov = " It covers tasks whose subject starts with: eq scope."  # 0.7.0's proposal note names the covers list; main's has none
 b = b.replace(cov, "") if b.count(cov) == 1 else "no covers sentence"
+acc = "Accept only if the scope and the covers list fit"  # and asks the acceptor to check both
+b = b.replace(acc, "Accept only if the scope fits") if b.count(acc) == 1 else "no covers check"
 as_branch = lambda t: re.sub(r"agent-board(?=: | hold | skill )", "switchboard", t)  # main's prefix as this copy's
 unprefixed = lambda t: re.sub(r"switchboard(?=: | hold | skill )", "", t)
 texts = [json.loads(x) for x in b.split("\n") if x.strip()]
