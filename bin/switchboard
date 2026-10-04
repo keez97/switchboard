@@ -6357,12 +6357,16 @@ def link_answer(a):
         l.update({"state": "active", "accepted": now(), "until": now() + int(l.get("span") or AGENT_LINK_HOURS * 3600),
                   "accepted_by": dict(who, covers=l.get("covers"))})
         save(BOARD / "links" / (a.lid + ".json"), l)
-        write_event("link", "link:" + a.lid, "link %s accepted by %s: %s within: %s, until %s, %s. Proposed by "
-                    "%s. Made by two sessions within the agent limits; extending it or raising its cap is %s's" % (
-                        a.lid, who_str(who), link_ends(l), l["scope"], iso(l["until"]), cap_str(l.get("cap")), who_str(p), OWNER),
+        # both name the list just stamped, as the proposal note names it: a list changed after the note shows here
+        cov = covers_str(l)
+        write_event("link", "link:" + a.lid, "link %s accepted by %s: %s within: %s. It covers tasks whose subject starts "
+                    "with: %s. Until %s, %s. Proposed by %s. Made by two sessions within the agent limits; extending it or "
+                    "raising its cap is %s's" % (
+                        a.lid, who_str(who), link_ends(l), l["scope"], cov, iso(l["until"]), cap_str(l.get("cap")), who_str(p),
+                        OWNER),
                     [l["from"]["repo"], l["to"]["repo"]], {"session_id": rec["session_id"]}, "link%saccept" % a.lid)
-        print("link %s accepted: %s within: %s, until %s, %s%s" % (
-            a.lid, link_ends(l), l["scope"], iso(l["until"]), cap_str(l.get("cap")),
+        print("link %s accepted: %s within: %s. It covers tasks whose subject starts with: %s. Until %s, %s%s" % (
+            a.lid, link_ends(l), l["scope"], cov, iso(l["until"]), cap_str(l.get("cap")),
             "; this session now holds %s" % addr if taking else ""))
     if rec and agent_caller(d):
         tell_cli(rec["session_id"], end_act("accepted" if accept else "declined", a.lid, l, pe), pe["repo"] != rec["repo"])

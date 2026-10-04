@@ -261,6 +261,22 @@ nx=$(ptu "$T/py" X2); TX3=$(xrq "client: regenerate" kx3 | awk 'NR==1{print $1}'
 echo "$nx" | has "a task for you.*$TX1" && echo "$nx" | has "^Link $LX does not cover this request (scope does not name the subject, and the covers list was not shown at acceptance), so it is information" \
   && ok "the worker's note for such a request says information only, naming the list not shown" || die "unstamped note: $nx"
 
+# a covers list changed between the acceptor's note and its accept: the accept output and event name the list stamped
+fx_repos rx ry
+seat Y1 "$T/rx" lead30; seat Y2 "$T/ry" doer30
+for s in "Y1 rx" "Y2 ry"; do set -- $s; hook SessionStart "$T/$2" $1 >/dev/null; done
+SWITCHBOARD_SESSION_ID=Y1 "$B" role lead >/dev/null; SWITCHBOARD_SESSION_ID=Y2 "$B" role doer >/dev/null
+LE=$(try env SWITCHBOARD_SESSION_ID=Y1 "$B" link --from "$T/rx:lead" --to "$T/ry:doer" --scope "build item-x" --covers "item-x" | awk 'NR==1{print $2}')
+ne=$(ptu "$T/ry" Y2); FE="$SWITCHBOARD_DIR/links/$LE.json"
+echo "$ne" | has -F "It covers tasks whose subject starts with: item-x. " || die "setup: note for $LE: $ne"
+jq '.covers = ["item-x", "deploy"]' "$FE" > "$T/le.json" && mv "$T/le.json" "$FE"   # the proposer widens it now
+out=$(SWITCHBOARD_SESSION_ID=Y2 "$B" link accept "$LE" 2>&1) || die "setup: $LE not accepted: $out"
+cs="It covers tasks whose subject starts with: item-x, deploy. Until "
+[ "$(jq -c .accepted_by.covers "$FE")" = '["item-x","deploy"]' ] && echo "$out" | head -1 | has -F "link $LE accepted: rx:lead directs ry:doer within: build item-x. $cs" \
+  && ev "link $LE accepted by" | has -F "within: build item-x. $cs" \
+  && ok "a covers list changed after the note: the accept output and the accept event name the list stamped" \
+  || die "accept covers: $out / $(ev "link $LE accepted by") / $(cat "$FE")"
+
 [ ! -s "$SWITCHBOARD_STATE/errors.log" ] && ok "no hook error was swallowed" || die "errors: $(cat "$SWITCHBOARD_STATE/errors.log")"
 
 # a broken proposal record and an unreadable command cost the note, never the hook
