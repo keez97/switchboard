@@ -35,7 +35,7 @@ ev "link $LP proposed by" | has "^2 False .*alpha:roadmap (session \"road\" on e
 [ -z "$(AID=a1 pre PostToolUse "$T/beta" S2 u0 Read '{}' | ctx | grep "proposes link")" ] && ok "a subagent's tool call gets no proposal note" || die "subagent got the proposal"
 n2=$(ptu "$T/beta" S2)
 echo "$n2" | has "alpha:roadmap (session \"road\" on east) proposes link $LP: alpha:roadmap directs beta:implementer within: order the next work items" \
-  && echo "$n2" | has "Accept only if the scope fits the work this session is already doing" && echo "$n2" | has "board link accept $LP" \
+  && echo "$n2" | has "Accept only if the scope and the covers list fit the work this session is already doing" && echo "$n2" | has "board link accept $LP" \
   && echo "$n2" | has "board link decline $LP" && echo "$n2" | has "for 24 hours from acceptance, no cap" \
   && ok "the session holding the other end gets a note naming the proposer, direction, scope, limits and both commands" || die "proposal note: $n2"
 [ -z "$(ptu "$T/beta" S2 | grep "proposes link")" ] && [ -z "$(up "$T/beta" S2 "next" | ctx | grep "proposes link")" ] && ok "the note is shown once per session" || die "note repeated"

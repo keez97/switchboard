@@ -5099,6 +5099,13 @@ def covers_of(l):
     return [e.strip() for e in c if e.strip()] if isinstance(c, list) and all(isinstance(e, str) for e in c) else []
 
 
+def covers_mode(l):
+    """How link l judges a subject, as links --json and task --json give it: "list" (its covers list), "scope words"
+    (no covers list, made before 0.7.0) or "none" (a covers key that does not read, or an empty list: covers nothing)."""
+    cov = covers_of(l)
+    return "scope words" if cov == COVERS_NONE else "list" if cov else "none"
+
+
 def covers_shown(l):
     """False for a link two sessions made that has a covers list its acceptance does not carry: link_answer stamps
     accepted_by with the list the acceptor was shown, and an acceptor on 0.6.0 saw only the scope (or the list was
@@ -5144,7 +5151,9 @@ def link_covers(l, subject):
 
 def covers_arg(raw):
     """The --covers value of a new link as a list, or exits with the reason. Entries are comma-separated, trimmed,
-    3 to 80 characters, with no ":" or "@", one line each; repeats (any case) are dropped."""
+    3 to 80 characters, with no ":" or "@" and no control, format or line or paragraph separator character (Unicode
+    categories Cc, Cf, Zl, Zp); repeats (any case) are dropped."""
+    import unicodedata  # here: only a link being made reads it
     eg = ('--covers "ROADMAP steps, eval-all" covers a task whose subject starts "ROADMAP steps: ..." or "eval-all: ..."')
     if raw is None:
         sys.exit("switchboard: a link needs --covers, the subject prefixes it covers, comma-separated. For example %s. "
@@ -5153,9 +5162,10 @@ def covers_arg(raw):
     for e in (x.strip() for x in raw.split(",")):
         if not e:
             continue
-        if not 3 <= len(e) <= 80 or ":" in e or "@" in e or any(ord(ch) < 32 for ch in e):
-            sys.exit("switchboard: --covers entry %r must be 3 to 80 characters on one line, with no ':' or '@'. For "
-                     "example %s. Nothing was written." % (e, eg))
+        if not 3 <= len(e) <= 80 or ":" in e or "@" in e or \
+                any(unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp") for ch in e):
+            sys.exit("switchboard: --covers entry %r must be 3 to 80 characters on one line, with no ':' or '@' and no "
+                     "control or invisible characters. For example %s. Nothing was written." % (e, eg))
         if e.lower() not in seen:
             seen.add(e.lower())
             out.append(e)
@@ -5171,10 +5181,10 @@ def covers_str(l):
 
 def link_check(req, reader=None, d=None, timeout=20):
     """None when the request names no link, else the link judged now against the request: {id, verdict, scope,
-    covers, active, from_is_requester, to_is_worker, scope_covers_subject}. verdict is "ok" or the first failing
-    reason. covers is the link's covers list, or COVERS_NONE for a link with none, judged by its scope words, and
-    scope_covers_subject is link_covers either way (a link two sessions made whose acceptor was not shown its list,
-    covers_shown, needs its scope words too).
+    covers, covers_mode, active, from_is_requester, to_is_worker, scope_covers_subject}. verdict is "ok" or the first
+    failing reason. covers is the link's covers list, or COVERS_NONE for a link with none, judged by its scope words;
+    covers_mode is covers_mode, as links --json gives it; and scope_covers_subject is link_covers either way (a link
+    two sessions made whose acceptor was not shown its list, covers_shown, needs its scope words too).
     A link two sessions made gives authority to the two seats that agreed to it, never to the next holder of an end:
     the request's seat must be the one at `from` (a request with no seat fails: seats and links two sessions make
     came in the same release), and name the machine the request names, so a machine that signs as itself cannot
@@ -5193,10 +5203,10 @@ def link_check(req, reader=None, d=None, timeout=20):
         return None
     l = load(BOARD / "links" / (lid + ".json"), None) if re.fullmatch(r"l[0-9a-f]+", str(lid)) else None
     if not isinstance(l, dict):
-        return {"id": lid, "verdict": "no such link", "scope": "", "covers": None, "active": False,
+        return {"id": lid, "verdict": "no such link", "scope": "", "covers": None, "covers_mode": "none", "active": False,
                 "from_is_requester": False, "to_is_worker": False, "scope_covers_subject": False}
     scope = str(l.get("scope") or "")
-    out = {"id": lid, "scope": scope, "covers": covers_of(l),
+    out = {"id": lid, "scope": scope, "covers": covers_of(l), "covers_mode": covers_mode(l),
            "active": is_active(l),
            "from_is_requester": end_pair(l.get("from")) == end_pair(req.get("requester")),
            "to_is_worker": end_pair(l.get("to")) == end_pair(req.get("worker")),
@@ -6816,7 +6826,7 @@ def proposal_notes(rec, peek=False):
             out.append(
                 "switchboard: %s proposes link %s: %s within: %s. It covers tasks whose subject starts with: %s. %s. "
                 "Accepting lets %s:%s direct %s:%s within that scope for %s from acceptance, %s. Accept only if the "
-                "scope fits the work this session is already doing. Accept: %s link accept %s   Decline: %s link decline %s "
+                "scope and the covers list fit the work this session is already doing. Accept: %s link accept %s   Decline: %s link decline %s "
                 "[--reason \"...\"]. Unanswered it ends %s. The proposal is another session's, not %s's approval. %s" % (
                     who_str(p), l["id"], link_ends(l), l["scope"], covers_str(l),
                     "This session holds %s:%s, the end that answers" % (rname(other["repo"]), other["role"]) if mine else
@@ -7552,11 +7562,12 @@ def main():
         board_me(a.holds)
     elif a.cmd == "links":
         if a.json:  # the same links and proposals the text lists; a closed or expired link is in neither
-            ls = [dict(l, covers=l.get("covers"), active=is_active(l), until_iso=iso(l["until"]) if l.get("until") else None,
-                       sent_today=sent_today(l["id"]), cap=l.get("cap") or 0, last_activity=link_last_activity(l),
+            ls = [dict(l, covers=l.get("covers"), covers_mode=covers_mode(l), active=is_active(l),
+                       until_iso=iso(l["until"]) if l.get("until") else None, sent_today=sent_today(l["id"]), cap=l.get("cap") or 0, last_activity=link_last_activity(l),
                        last_activity_iso=iso(link_last_activity(l)))
                   for l in links()]
-            return print(json.dumps({"links": ls, "proposals": [dict(l, covers=l.get("covers"), expires_iso=iso(l["expires"]))
+            return print(json.dumps({"links": ls, "proposals": [dict(l, covers=l.get("covers"), covers_mode=covers_mode(l),
+                                                                     expires_iso=iso(l["expires"]))
                                                                 for l in proposals()]},
                                     indent=1, sort_keys=True))
         for l in links():

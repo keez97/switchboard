@@ -52,6 +52,13 @@ setcovers '["PLAN-07 D1", "PLAN-07"]'; echo '{"tbad": {}}' > "$SWITCHBOARD_STATE
 echo "$out" | ctx | has "a task for you.*$TB" && echo "$out" | ctx | has "task $TB requested" && grep -qE " _sharded _sharded:[0-9]+ malformed notified/SNN.json" "$SWITCHBOARD_STATE/errors.log" \
   && jq -e "(has(\"tbad\") | not) and has(\"$TB\") and ([.[] | .ts | numbers] | length) == length" "$SWITCHBOARD_STATE/notified/SNN.json" >/dev/null \
   && ok "a marker entry of the wrong shape is dropped and logged with function:line, the task note still arrives, and the file is written clean" || die "failure path: $out / $(cat "$SWITCHBOARD_STATE/errors.log" 2>/dev/null)"
+# a link with no covers list (made before 0.7.0) is judged by its scope words: one that stopped naming the subject
+# after the request gives the worker an information note naming that reason
+TZ=$(nreq "PLAN-07: D2 scope"); jq 'del(.covers) | .scope = "docs only"' "$SWITCHBOARD_DIR/links/$LN.json" > "$T/ln" && mv "$T/ln" "$SWITCHBOARD_DIR/links/$LN.json"
+out=$(hook PostToolUse "$SE" SNN Read '{}' | ctx)
+echo "$out" | has "a task for you.*$TZ" && echo "$out" | has "^Link $LN does not cover this request (scope does not name the subject), so it is information" \
+  && ok "no covers list: the worker's note for a subject the scope does not name says information only (scope does not name the subject)" || die "scope note: $out"
+jq '.covers = ["PLAN-07 D1", "PLAN-07"] | .scope = "PLAN-07 D1 and D2"' "$SWITCHBOARD_DIR/links/$LN.json" > "$T/ln" && mv "$T/ln" "$SWITCHBOARD_DIR/links/$LN.json"
 # more than five waiting: the oldest requests come first, whatever their ids
 seat SNQ "$SE" "batcher"; hook SessionStart "$SE" SNQ >/dev/null; SWITCHBOARD_SESSION_ID=SNQ "$B" role batch >/dev/null
 for i in 1 2 3 4 5 6 7; do SWITCHBOARD_SESSION_ID=SNA "$B" task request --to "$SE:batch" --subject "batch $i" --key "batch-$i" --no-sign >/dev/null; done

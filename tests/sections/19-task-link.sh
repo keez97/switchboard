@@ -7,7 +7,7 @@ TID=$(SWITCHBOARD_SESSION_ID=S5 "$B" task request --to "$T/eps:builder" --subjec
 lk(){ SWITCHBOARD_SESSION_ID="$1" "$B" link --from "$2" --to "$T/eps:builder" --scope "$3" --covers "${4:-app}" --until 30d | awk 'NR==1{print $2}'; }   # covers app unless named
 rq(){ SWITCHBOARD_SESSION_ID=S5 "$B" task request --to "$T/eps:builder" --subject "$1" --key "$2" --link "$3" 2>/dev/null | awk '{print $1}'; }
 LK=$(lk S5 "$T/delta:lead" "evaluate app builds for eps"); TK=$(rq "app@abc1234" lk1 "$LK")
-"$B" task "$TK" | has -x "  link $LK: ok" && "$B" task "$TK" --json | python3 -c "import json,sys; l=json.load(sys.stdin)['link']; sys.exit(0 if l=={'id':'$LK','verdict':'ok','scope':'evaluate app builds for eps','covers':['app'],'active':True,'from_is_requester':True,'to_is_worker':True,'scope_covers_subject':True} else 1)" && grep -q "\"link\": \"$LK\"" "$SWITCHBOARD_DIR"/tasks/eps--builder/"$TK"/000-request.json && ok "a request naming a live link from the requester's own address shows link ok in text and json" || die "link ok: $("$B" task "$TK" --json | python3 -c "import json,sys; print(json.load(sys.stdin)['link'])")"
+"$B" task "$TK" | has -x "  link $LK: ok" && "$B" task "$TK" --json | python3 -c "import json,sys; l=json.load(sys.stdin)['link']; sys.exit(0 if l=={'id':'$LK','verdict':'ok','scope':'evaluate app builds for eps','covers':['app'],'covers_mode':'list','active':True,'from_is_requester':True,'to_is_worker':True,'scope_covers_subject':True} else 1)" && grep -q "\"link\": \"$LK\"" "$SWITCHBOARD_DIR"/tasks/eps--builder/"$TK"/000-request.json && ok "a request naming a live link from the requester's own address shows link ok in text and json" || die "link ok: $("$B" task "$TK" --json | python3 -c "import json,sys; print(json.load(sys.stdin)['link'])")"
 "$B" unlink "$LK" --reason "done" >/dev/null; "$B" task "$TK" | has -x "  link $LK: link revoked" && "$B" task "$TK" --json | has '"active": false' && ok "after unlink the same request shows link revoked, judged at read time" || die "revoked: $("$B" task "$TK" | grep link)"
 n=$(find "$SWITCHBOARD_DIR/tasks" -name 000-request.json | wc -l); out=$(SWITCHBOARD_SESSION_ID=S5 "$B" task request --to "$T/eps:builder" --subject "app@abc1234" --key lk1 --link "$LK" 2>&1) && rc=0 || rc=$?
 [ "$rc" = 0 ] && [ "$out" = "$TK already requested (same worker and key); nothing written" ] && [ "$(find "$SWITCHBOARD_DIR/tasks" -name 000-request.json | wc -l)" = "$n" ] \
@@ -71,6 +71,13 @@ TK=$(rq "Karim: the .githooks/pre-push hold check (t9b8549a2) is yours" fb2 "$LO
 TP=$(rq "ROADMAP steps: x" fb3 "$LO"); TW=$(rq "PLAN-04/05/07" fb4 "$LO")
 [ -n "$TP" ] && [ -n "$TW" ] && [ -z "$(rq "line: x" fb5 "$LO")" ] && [ -z "$(rq "eval: x" fb6 "$LO")" ] \
   && ok "no list: whole words of the scope cover; a word joined to another by '-' (line-fixes, stations-eval) does not" || die "fallback words: $TP $TW"
+# the scope stops naming a subject after the request: not ok at read time, and the worker's note says so (20); refused at send
+TV=$(rq "Karim: judged later" fb7 "$LO"); edl "$LO" scope '"docs only"'
+[ -n "$TV" ] && "$B" task "$TV" | has -x "  link $LO: scope does not name the subject" \
+  && "$B" task "$TV" --json | jq -e '.link.verdict == "scope does not name the subject" and .link.covers_mode == "scope words" and (.link.scope_covers_subject | not)' >/dev/null \
+  && ok "no list: a scope that stopped naming the subject after the request reads scope does not name the subject" || die "fallback read time: $("$B" task "$TV" --json | jq -c .link)"
+refused "$LO" "app: x" fb8 && echo "$out" | has -xF "switchboard: link $LO does not cover this request: it has no covers list, so its scope words are used, and its scope 'docs only' does not name the subject (the subject, its part before ':' or '@', or an id in it must appear in the scope as whole words). Nothing was written." \
+  && ok "no list: a subject the scope does not name is refused at send with the scope quoted, and nothing is written" || die "fallback send: rc $rc: $out"
 
 # ---- a new link needs --covers: at least one entry, 3 to 80 characters, no ':' or '@'
 nl(){ ls "$SWITCHBOARD_DIR"/links/*.json | grep -c .; }
@@ -80,6 +87,10 @@ mk && echo "$out" | has -xF "switchboard: a link needs --covers, the subject pre
   && ok "a link without --covers is refused with the flag and an example, and nothing is written" || die "no covers: rc $rc: $out"
 mk --covers "ok entry, ab" && echo "$out" | has -F "entry 'ab' must be 3 to 80 characters" && mk --covers "eval: all" && mk --covers "app@x" && mk --covers " , " \
   && mk --covers "$(printf 'x%.0s' $(seq 81))" && ok "an entry under 3 or over 80 characters, one with ':' or '@', and an empty list are refused" || die "bad entries: rc $rc: $out"
+bad=""   # DEL, U+0085 (next line), U+2028 (line separator), U+2029, U+200B (zero width space): Cc, Cc, Zl, Zp, Cf
+for c in '\177' '\302\205' '\342\200\250' '\342\200\251' '\342\200\213'; do
+  mk --covers "$(printf "abc${c}def")" && echo "$out" | has -F "no control or invisible characters" || bad="$bad $c"; done
+[ -z "$bad" ] && ok "an entry with DEL, U+0085, U+2028, U+2029 or U+200B is refused, and nothing is written" || die "control entries:$bad: $out"
 LD=$(lk S5 "$T/delta:lead" "dedup" " eval-all ,ROADMAP steps,, EVAL-ALL ")
 [ "$(jq -c .covers "$SWITCHBOARD_DIR/links/$LD.json")" = '["eval-all","ROADMAP steps"]' ] && ok "entries are trimmed, empty ones dropped and repeats in any case kept once" || die "dedup: $(jq -c .covers "$SWITCHBOARD_DIR/links/$LD.json")"
 
@@ -89,5 +100,15 @@ grep -A3 "^$LR " "$T/links.txt" | has -x "    covers: eval-all" && grep -A3 "^$L
   && grep "^$LR " "$T/links.txt" | has "^$LR  delta:lead -> eps:builder.*  scope: the architect.*  today 0/100  last activity" \
   && jq -e --arg r "$LR" --arg o "$LO" '[.links[] | select(.id == $r) | .covers] == [["eval-all"]] and [.links[] | select(.id == $o) | .covers] == [null]' "$T/links.json" >/dev/null \
   && ok "board links shows covers on an indented line under an unchanged row 1; --json has the list, null when there is none" || die "links: $(grep -A3 "^$LR " "$T/links.txt") / $(jq -c '[.links[] | {id, covers}]' "$T/links.json")"
+# covers_mode: links --json and task --json agree, for a list, no list, and a covers key that does not read
+edl "$LD" covers '"eval-all"'; TM=$(SWITCHBOARD_SESSION_ID=S5 "$B" task request --to "$T/eps:builder" --subject "eval-all" --key cm1 --link "$LD" --no-sign 2>/dev/null | awk 'NR==1{print $1}') || true
+[ -z "$TM" ] || die "setup: a malformed covers list covered $TM"
+edl "$LD" covers '["eval-all"]'; TM=$(rq "eval-all" cm2 "$LD"); edl "$LD" covers '"eval-all"'
+"$B" links --json > "$T/links.json"; mode(){ jq -r --arg l "$1" '.links[] | select(.id == $l) | .covers_mode' "$T/links.json"; }
+tmode(){ "$B" task "$1" --json | jq -r .link.covers_mode; }
+[ "$(mode "$LR")" = list ] && [ "$(tmode "$TB")" = list ] && [ "$(mode "$LO")" = "scope words" ] && [ "$(tmode "$TV")" = "scope words" ] \
+  && [ "$(mode "$LD")" = none ] && [ "$(tmode "$TM")" = none ] \
+  && ok "links --json and task --json give the same covers_mode: list, scope words, and none for a covers key that does not read" \
+  || die "covers_mode: $(mode "$LR")/$(tmode "$TB") $(mode "$LO")/$(tmode "$TV") $(mode "$LD")/$(tmode "$TM")"
 
 finish

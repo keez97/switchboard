@@ -124,7 +124,7 @@ switchboard init --remote git@github.com:you/my-board.git     # on the first mac
 
 `--join` clones the board, makes a signing key and prints the command that adds the new machine to `keys/allowed_signers`. Run it in a terminal on a machine already on the board. Until then, the new machine's requests read BAD SIGNATURE and count as information.
 
-To rename a machine, run `switchboard init --update --machine <new>` on it. Its records move to the new name, and the new name gets the old name's signing key, so the key line init prints for it carries that key. Once you add that line, both names are one machine and the tasks it requested over links under the old name count again. A machine renamed with 0.6.0 has a new key: `switchboard status` prints the command that adds the new name with the old key, for you to run. A machine with no key has nothing to vouch for its old requests, so init lists the open ones to request again.
+To rename a machine, run `switchboard init --update --machine <new>` on it. Its records move to the new name, and the new name gets the old name's signing key, so the key line init prints for it carries that key. Once you add that line, both names are one machine and the tasks it requested over links under the old name count again. Keep the old name's line in `keys/allowed_signers`: the requests signed before the rename verify against it. A machine renamed with 0.6.0 has a new key: `switchboard status` prints the command that adds the new name with the old key, for you to run. A machine with no key has nothing to vouch for its old requests, so init lists the open ones to request again.
 
 Events, holds, roles, links and tasks travel through git. Sessions pull when they start, push when a turn ends, and pull in the background at most once a minute, so a change usually shows on another machine within a minute or two. Live messages between machines go through Claude Code's Remote Control, and `switchboard who` lists those sessions. Anyone who can push to the board repo can write records, so keep it private.
 
@@ -170,9 +170,9 @@ A link two sessions make runs at most 24 hours from acceptance and closes when e
 
 `switchboard links` shows when each link ends on a second line and its covers list on the next. `switchboard links --json` prints the same links and proposals as JSON, with the sends so far today and the last activity.
 
-Every new link needs `--covers`: the task subjects it covers, as a comma-separated list of prefixes. Each entry is 3 to 80 characters with no `:` or `@`. A task is covered when its subject is an entry, or starts with one followed by `:` or `@`. So word a subject as `<prefix>: what to do`. With `--covers "client, schema"`, the subjects `client: regenerate the SDK` and `schema@4f2a1c9` are covered, and `clients: x` and `Build: client` are not. The scope is for people to read. It decides nothing about tasks.
+Every new link needs `--covers`: the task subjects it covers, as a comma-separated list of prefixes. Each entry is 3 to 80 characters with no `:` or `@` and no control or invisible characters, so an id that contains `:` or `@`, or is shorter than 3 characters, cannot be listed: give such a task a subject that starts with an entry. A task is covered when its subject is an entry, or starts with one followed by `:` or `@`. So word a subject as `<prefix>: what to do`. With `--covers "client, schema"`, the subjects `client: regenerate the SDK` and `schema@4f2a1c9` are covered, and `clients: x` and `Build: client` are not. The scope is for people to read. It decides nothing about tasks.
 
-A link made before 0.7.0 has no covers list. Its tasks are judged by the words of its scope: the subject, or its part before `:` or `@`, must appear there as whole words, so `Build` does not match inside `builder's`. `switchboard task` and the worker's note say when a link is judged this way. To give such a link a list, end it and make a new one with `--covers`.
+A link made before 0.7.0 has no covers list. Its tasks are judged by the words of its scope: the subject, or its part before `:` or `@`, must appear there as whole words, so `Build` does not match inside `builder's`. `switchboard task` and the worker's note say when a link is judged this way. To give such a link a list, make a new one with `--covers`, then end the old one (see Upgrading to 0.7.0).
 
 A message from the `--from` end arrives with a header telling the receiver it may act within the scope. A task counts as an instruction when the link is live, the requester and worker are its two ends, the link covers the task's subject, and a request from another machine carries a valid signature. Everything else from another session is information, and the note says so.
 
@@ -185,7 +185,11 @@ switchboard link --from api:backend --to web:frontend --scope "client generation
 switchboard unlink l5c2a1e
 ```
 
-Requests then name the new link's id. Update every machine on the board the same day: until all of them run 0.7.0, a 0.6.0 machine judges a link by its scope and can reach a different verdict on the same task.
+Finish or request again the old link's open tasks before `unlink`: after it they read `link revoked` and count as information. Requests then name the new link's id.
+
+A link two sessions made carries the covers list the accepting session was shown. A session on 0.6.0 accepts seeing only the scope, so the tasks of a link it accepted need both the list and the whole words of the scope. A session on 0.7.0 cannot accept a proposal made on 0.6.0, which has no list: its proposer proposes again with `--covers`.
+
+Update every machine on the board the same day: until all of them run 0.7.0, a 0.6.0 machine judges a link by its scope and can reach a different verdict on the same task.
 
 ## Workers
 
