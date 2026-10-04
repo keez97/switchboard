@@ -65,8 +65,25 @@ pid_of(){ python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['pid']
 E=$(claude E sE); ev E SessionStart; ev E PostToolUse
 [ "$(pid_of)" = "$E" ] && cp "$SWITCHBOARD_STATE/claude/sE.json" "$T/recE.json" || die "setup: no record of E"
 E2=$(claude E2 sE)   # E still runs: two processes, two session files, one session id
-ev E2 SessionStart
-[ "$(pid_of)" = "$E2" ] && ok "two processes run one session id: SessionStart in the second records the second" || die "record pid $(pid_of), want $E2"
+# hooks in both, alternating: the record keeps naming E, where each hook used to rewrite it to its own process
+seq=""; want=""
+for e in SessionStart PostToolUse UserPromptSubmit PostToolUse Stop; do
+  ev E2 "$e"; seq="$seq $(pid_of)"; ev E "$e"; seq="$seq $(pid_of)"; want="$want $E $E"; done
+[ "$seq" = "$want" ] && ok "two live processes on one session id, hooks alternating between them: the record keeps naming the first" || die "record pids:$seq, want$want"
+# walk only (no session files): a CLI call under E finds E's own process, not the other one's
+mkdir -p "$T/sess"; mv "$HOME/.claude/sessions/$E.json" "$HOME/.claude/sessions/$E2.json" "$T/sess/"
+rm "$SWITCHBOARD_STATE/claude/sE.json"; ev E PostToolUse
+for e in PostToolUse UserPromptSubmit PostToolUse; do ev E2 "$e"; ev E "$e"; done; ev E2 PostToolUse
+own=$(under E "python3 -c \"
+import importlib.machinery, importlib.util
+l = importlib.machinery.SourceFileLoader('sb', '$B'); m = importlib.util.module_from_spec(importlib.util.spec_from_loader('sb', l)); l.exec_module(m)
+print(m.own_session()['pid'])\"")
+[ "$(pid_of)" = "$E" ] && [ "$own" = "$E" ] && ok "walk only, hooks alternating: the record stays on the first process and own_session under it returns its pid" \
+  || die "walk only: record pid $(pid_of), own_session under E $own, want $E"
+# a record a walk made, the session files back: a prompt in the other live process leaves it as it is
+mv "$T/sess/$E.json" "$T/sess/$E2.json" "$HOME/.claude/sessions/"
+ev E2 UserPromptSubmit
+[ "$(pid_of)" = "$E" ] && ok "a walk's record and both session files: a prompt in the other live process leaves the record on the first" || die "recheck: record pid $(pid_of), want $E"
 python3 "$FC" quit "$T/fc-E.sock"; rm -f "$HOME/.claude/sessions/$E.json"
 cp "$T/recE.json" "$SWITCHBOARD_STATE/claude/sE.json"
 ev E2 SessionStart
