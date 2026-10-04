@@ -247,6 +247,50 @@ chmod 700 "$S"
   && ok "~/.ssh not writable: init finishes, the config and the records both say the new name, and it says there is no key" \
   || die "read-only ~/.ssh: rc $rc; $(cfg); $(ls "$D/machines"); $out"
 
+# ---- the new name's .pub must match the key placed, or ssh-keygen -Y sign refuses and every request goes unsigned
+ssh-keygen -q -t ed25519 -N "" -f "$S/switchboard_gum" -C gum
+pubok(){ [ ! -L "$S/switchboard_$1.pub" ] && [ "$(cut -d' ' -f1,2 "$S/switchboard_$1.pub")" = "$(ssh-keygen -y -f "$S/switchboard_$1" | cut -d' ' -f1,2)" ]; }
+signs(){ echo "$1 namespaces=\"switchboard-task\" $(cut -d' ' -f1,2 "$S/switchboard_$1.pub")" >> "$AS"
+  [ "$(js "$(rqf P5 builder "plain $1" "pub-$1")")" = "signed by $1" ]; }
+cp "$T/otherk.pub" "$S/switchboard_hob.pub"   # a stale .pub of another key at the new name
+out=$("$B" init --update --machine hob 2>&1)
+[ "$S/switchboard_hob" -ef "$S/switchboard_gum" ] && pubok hob && signs hob && ! echo "$out" | has "not given\|not written" \
+  && echo "$out" | has -x "  key      ~/.ssh/switchboard_hob (the key of gum, linked from ~/.ssh/switchboard_gum)" \
+  && ok "a stale .pub at the new name is replaced by the placed key's, and the new name's requests are signed" \
+  || die "stale .pub: $(ls -l "$S"); $out"
+echo VICTIM > "$T/victim"; ln -s "$T/victim" "$S/switchboard_ivy.pub"   # a symlink there, to a file of someone's
+out=$("$B" init --update --machine ivy 2>&1)
+[ "$(cat "$T/victim")" = VICTIM ] && pubok ivy && signs ivy && ! echo "$out" | has "not given\|not written" \
+  && ok "a symlink at the new name's .pub is replaced, never written through: its target is left as it is" \
+  || die "symlink .pub: $(cat "$T/victim"); $(ls -l "$S"); $out"
+chmod 000 "$S/switchboard_ivy.pub"   # the old .pub unreadable, and no hard links
+out=$(SWITCHBOARD_TEST_NOLINK=1 "$B" init --update --machine jay 2>&1)
+chmod 644 "$S/switchboard_ivy.pub"
+! echo "$out" | has "not given\|not written" && echo "$out" | has -x "  key      ~/.ssh/switchboard_jay (the key of ivy, copied from ~/.ssh/switchboard_ivy)" \
+  && pubok jay && signs jay && ! ls -a "$S" | grep -q '\.tmp$' \
+  && ok "an unreadable old .pub with no hard links: the .pub is read from the key copied, and init and stderr agree the key was given" \
+  || die "unreadable .pub: $(ls -la "$S"); $out"
+# a temporary file another run left where this run's own would go is never removed
+r=$(python3 - "$B" <<'PY'
+import importlib.machinery, importlib.util, os, sys
+l = importlib.machinery.SourceFileLoader("sb", sys.argv[1]); m = importlib.util.module_from_spec(importlib.util.spec_from_loader("sb", l))
+l.exec_module(m); s = m.HOME / ".ssh"
+def nolink(*a, **k):
+    raise OSError(18, "no hard links")
+os.link = nolink
+theirs = [s / (".switchboard_kim%s.%d.tmp" % (x, os.getpid())) for x in ("", ".pub")]
+for f in theirs:
+    f.write_text("another run's file\n")
+r = m.reuse_key("jay", "kim")
+print(r, all(f.exists() and f.read_text() == "another run's file\n" for f in theirs))
+for f in theirs:
+    f.exists() and f.unlink()
+PY
+)
+[ "$r" = "copied from ~/.ssh/switchboard_jay True" ] && cmp -s "$S/switchboard_kim" "$S/switchboard_jay" && pubok kim \
+  && ok "another run's temporary file where this run's would go is left as it is, and the key and .pub are still placed" \
+  || die "their tmp: $r; $(ls -la "$S")"
+
 # ---- a name keys/allowed_signers gives to a key this machine does not have is another machine's: nothing moves
 mkdir -p "$D/keys"; ssh-keygen -q -t ed25519 -N "" -f "$T/westkey" -C west
 echo "west namespaces=\"switchboard-task\" $(cut -d' ' -f1,2 "$T/westkey.pub")" > "$D/keys/allowed_signers"

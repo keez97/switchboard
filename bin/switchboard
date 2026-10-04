@@ -3075,39 +3075,80 @@ def key_file(machine):
 
 
 def reuse_key(old, new):
-    """init renaming this machine from old to new: ~/.ssh/switchboard_<new> becomes a hard link to old's key file, and
-    its .pub to old's .pub (a copy, the key mode 600, where a link cannot be made). The key line printed for new then
-    carries old's key, and the owner's line for it is the proof the two names are one machine (aliases). Nothing is
-    moved: a rename back still finds old's key, and move_machine reads it. '' when new has a key already or old has
-    none, else what was done. Never raises: a key it cannot link or copy (~/.ssh not writable, old's key unreadable)
-    is one line on stderr, and signing_key then makes a new key or says why not. A copy is read whole first and
-    written under a temporary name, so it never leaves a partial file that would block signing_key."""
+    """init renaming this machine from old to new: ~/.ssh/switchboard_<new> becomes a hard link to old's key file (a
+    copy, mode 600, where a link cannot be made). The key line printed for new then carries old's key, and the owner's
+    line for it is the proof the two names are one machine (aliases). Nothing is moved: a rename back still finds old's
+    key, and move_machine reads it. '' when new has a key already or old has none, else what was done.
+    Its .pub must match the key placed, or ssh-keygen -Y sign refuses and every request goes unsigned: one already at
+    that name that does not (a stale file, a symlink) is replaced. It is old's .pub (linked, or copied) when that one
+    reads and matches, else the public key ssh-keygen -y reads from the key placed. A key whose public key cannot be
+    read so (a passphrase) keeps the .pub at that name, or gets old's.
+    Never raises: a key it cannot link or copy (~/.ssh not writable, old's key unreadable) is one line on stderr, and
+    signing_key then makes a new key or says why not; a .pub it cannot write is one line too. A copy is read whole first
+    and written under a temporary name of its own (mkstemp: never a name already there, so never another run's file),
+    then renamed onto the name, so it never leaves a partial file and never writes through a symlink."""
     src = key_file(old)
     if not src or key_file(new):
         return ""
     dst, how = HOME / ".ssh" / ("switchboard_%s" % new), "linked"
     try:
-        for a, b, mode in ((src, dst, 0o600), (src.with_name(src.name + ".pub"), dst.with_name(dst.name + ".pub"), 0o644)):
-            if not a.exists() or b.exists():
-                continue
-            try:
-                os.link(a, b)
-                continue
-            except OSError:
-                how = "copied"
-            data, tmp = a.read_bytes(), b.with_name(".%s.%d.tmp" % (b.name, os.getpid()))
-            try:
-                with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode), "wb") as w:
-                    w.write(data)
-                os.replace(tmp, b)
-            finally:
-                if os.path.lexists(tmp):
-                    os.unlink(tmp)
+        try:
+            os.link(src, dst)
+        except OSError:
+            how = "copied"
+            _put(dst, src.read_bytes(), 0o600)
     except OSError as e:
         print("switchboard: the key of %s was not given to %s (%s: %s)" % (old, new, e.strerror or e, tilde(e.filename or src)),
               file=sys.stderr)
-        return "%s from %s" % (how, tilde(src)) if dst.exists() else ""
+        return ""
+    a, b, want = src.with_name(src.name + ".pub"), dst.with_name(dst.name + ".pub"), key_pub(dst)
+    try:
+        cur = _pub_of(b) if os.path.lexists(b) and not os.path.islink(b) else None
+        if want and cur != want:
+            if _pub_of(a) == want:
+                try:
+                    if not os.path.lexists(b):
+                        os.link(a, b)
+                        return "%s from %s" % (how, tilde(src))
+                except OSError:
+                    pass
+                _put(b, a.read_bytes(), 0o644)
+            else:
+                _put(b, (want + "\n").encode(), 0o644)
+        elif not want and not os.path.lexists(b) and a.exists():
+            try:
+                os.link(a, b)
+            except OSError:
+                _put(b, a.read_bytes(), 0o644)
+    except OSError as e:
+        print("switchboard: the key of %s was given to %s, but its public key file %s was not written (%s)" % (
+            old, new, tilde(b), e.strerror or e), file=sys.stderr)
     return "%s from %s" % (how, tilde(src))
+
+
+def _pub_of(f):
+    """The 'type base64' of a .pub file, or None when it does not read."""
+    try:
+        pub = Path(f).read_text().split()[:2]
+    except (OSError, ValueError):
+        return None
+    return " ".join(pub) if len(pub) == 2 else None
+
+
+def _put(f, data, mode):
+    """Writes data to f under a new temporary name in its folder, mode mode, then renames it onto f: a symlink at f is
+    replaced, never followed. The temporary file is this call's own (mkstemp), and is removed when the write fails."""
+    import tempfile  # here: only init's rename reads it
+    fd, tmp = tempfile.mkstemp(dir=str(f.parent), prefix="." + f.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as w:
+            os.fchmod(w.fileno(), mode)
+            w.write(data)
+        os.replace(tmp, str(f))
+    except BaseException:
+        if os.path.lexists(tmp):
+            os.unlink(tmp)
+        raise
 
 
 def key_pub(key):
