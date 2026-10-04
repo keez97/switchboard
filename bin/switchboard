@@ -5095,6 +5095,12 @@ def task_request(a):
         sys.exit("switchboard: refused. The request matches a secret pattern (%s). Nothing was written." % m.lastgroup)
     if a.parent and not re.fullmatch(r"t[0-9a-f]{8}", a.parent):
         sys.exit("switchboard: --parent must be a task id like t0123abcd. Nothing was written.")
+    tid = "t" + hashlib.sha256(("%s:%s" % (rname(worker["repo"]), worker["role"]) + key).encode()).hexdigest()[:8]
+    home = BOARD / "tasks" / ("%s--%s" % (slug(rname(worker["repo"])), slug(worker["role"]))) / tid
+    f = home / "000-request.json"
+    dup = "%s already requested (same worker and key); nothing written" % tid
+    if f.exists():  # a rerun stays a no-op, whatever has become of its link since
+        return print(dup)
     if a.link and (not re.fullmatch(r"l[0-9a-f]+", a.link) or not (BOARD / "links" / (a.link + ".json")).exists()):
         sys.exit("switchboard: no link %s. Nothing was written." % a.link)  # signatures and seats are judged at read time
     watchers = [task_end(w, reg) for w in a.watch]
@@ -5125,10 +5131,6 @@ def task_request(a):
             why = ""
         if why:
             sys.exit("switchboard: link %s does not cover this request: %s. Nothing was written." % (a.link, why))
-    tid = "t" + hashlib.sha256(("%s:%s" % (rname(worker["repo"]), worker["role"]) + key).encode()).hexdigest()[:8]
-    home = BOARD / "tasks" / ("%s--%s" % (slug(rname(worker["repo"])), slug(worker["role"]))) / tid
-    f = home / "000-request.json"
-    dup = "%s already requested (same worker and key); nothing written" % tid
     if f.exists() or not write_once(f, {
             "id": tid, "subject": subject, "key": key, "kind": a.kind or "", "body": body, "worker": worker,
             "requester": requester, "session": d.get("sessionId", ""), "machine": MACHINE, "watchers": watchers,

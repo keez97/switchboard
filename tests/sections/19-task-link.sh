@@ -9,6 +9,9 @@ rq(){ SWITCHBOARD_SESSION_ID=S5 "$B" task request --to "$T/eps:builder" --subjec
 LK=$(lk S5 "$T/delta:lead" "evaluate app builds for eps"); TK=$(rq "app@abc1234" lk1 "$LK")
 "$B" task "$TK" | has -x "  link $LK: ok" && "$B" task "$TK" --json | python3 -c "import json,sys; l=json.load(sys.stdin)['link']; sys.exit(0 if l=={'id':'$LK','verdict':'ok','scope':'evaluate app builds for eps','active':True,'from_is_requester':True,'to_is_worker':True,'scope_covers_subject':True} else 1)" && grep -q "\"link\": \"$LK\"" "$SWITCHBOARD_DIR"/tasks/eps--builder/"$TK"/000-request.json && ok "a request naming a live link from the requester's own address shows link ok in text and json" || die "link ok: $("$B" task "$TK" --json | python3 -c "import json,sys; print(json.load(sys.stdin)['link'])")"
 "$B" unlink "$LK" --reason "done" >/dev/null; "$B" task "$TK" | has -x "  link $LK: link revoked" && "$B" task "$TK" --json | has '"active": false' && ok "after unlink the same request shows link revoked, judged at read time" || die "revoked: $("$B" task "$TK" | grep link)"
+n=$(find "$SWITCHBOARD_DIR/tasks" -name 000-request.json | wc -l); out=$(SWITCHBOARD_SESSION_ID=S5 "$B" task request --to "$T/eps:builder" --subject "app@abc1234" --key lk1 --link "$LK" 2>&1) && rc=0 || rc=$?
+[ "$rc" = 0 ] && [ "$out" = "$TK already requested (same worker and key); nothing written" ] && [ "$(find "$SWITCHBOARD_DIR/tasks" -name 000-request.json | wc -l)" = "$n" ] \
+  && ok "after unlink, rerunning the request with the same key is still the no-op it was, rc 0" || die "rerun after unlink: rc=$rc $out"
 edl(){ python3 - "$SWITCHBOARD_DIR/links/$1.json" "$2" "$3" <<'PY'   # rewrite one key of a link record, as an older board or another machine could leave it
 import json,sys
 f,k,v=sys.argv[1:4]; d=json.load(open(f)); d[k]=json.loads(v); json.dump(d,open(f,"w"))
