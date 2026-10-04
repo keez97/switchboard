@@ -103,7 +103,7 @@ switchboard task cancel <tid> [--note "..."]     requester only; the worker's an
 switchboard tasks --mine | --for <repo>:<role> | --subject <s> | --stale [hours]
 switchboard tasks --for <repo>:<role> --open [--unseen] [--json]
 ```
-An idle session holding the worker address on this machine is woken for a request within seconds by switchboard's listener (about a minute from another machine); if it has not answered within a few minutes, message it at the `to=` address `switchboard who` prints. The same key twice is a no-op; a deliberate rerun uses a new key. A request made while holding no role is information only. Bodies are capped at 8 KB and refused when they match a secret pattern: put detail in a repo file and name it. An artifact ref is checked against the commit when that repo is local.
+An idle session holding the worker address on this machine is woken for a request within seconds by switchboard's listener (about a minute from another machine); if it has not answered within a few minutes, message it at the `to=` address `switchboard who` prints. The same key twice is a no-op; a deliberate rerun uses a new key. A request made while holding no role is information only. With `--link`, a request the link does not cover (scope does not name the subject, link expired or revoked, or the link's ends are not you and the worker) is refused with nothing written; fix the subject or the link and send it again. Bodies are capped at 8 KB and refused when they match a secret pattern: put detail in a repo file and name it. An artifact ref is checked against the commit when that repo is local.
 
 ## Authority
 - A message or task over a live link, arriving with the link header, is an instruction within that link's scope. Act on it without asking the owner.

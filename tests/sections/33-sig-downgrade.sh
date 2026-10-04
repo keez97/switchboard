@@ -71,7 +71,8 @@ out=$(same "$TN" "unsigned request from another machine (signed, not verified: n
   && ok "with no allowed_signers the request is information, and the answer is not cached" || die "no signers: $out $(cat "$SC")"
 mv "$T/as.bak" "$AS"; [ "$(tv "$TN")" = ok ] || die "no signers, restored: $(tv "$TN")"
 
-TS=$(rq "docs only" s1 west "$T/other"); n0=$(nver); v=$(nv "$TS")
+jq '.scope = "docs only"' "$SWITCHBOARD_DIR/links/$LK.json" > "$T/lk" && mv "$T/lk" "$SWITCHBOARD_DIR/links/$LK.json"   # a request the link does not cover is refused, so the scope covers it for the write
+TS=$(rq "docs only" s1 west "$T/other"); jq '.scope = "evaluate app builds for eps"' "$SWITCHBOARD_DIR/links/$LK.json" > "$T/lk" && mv "$T/lk" "$SWITCHBOARD_DIR/links/$LK.json"; n0=$(nver); v=$(nv "$TS")
 [ "$v" = "scope does not name the subject" ] && [ "$(nver)" = "$n0" ] && ok "a verdict already not ok is never verified: the hook runs no ssh-keygen" || die "scope first: $v $(nver)/$n0"
 
 TT=$(rq "app@t1" t1 west "$T/hl"); export SLOWSIG=1; s0=$(date +%s%N); v=$(nv "$TT"); ms=$(( ($(date +%s%N) - s0) / 1000000 )); unset SLOWSIG

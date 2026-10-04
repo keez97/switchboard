@@ -10,6 +10,7 @@ LN=$(SWITCHBOARD_SESSION_ID=SNA "$B" link --from "$SE:architect" --to "$SE:build
 for s in SNA SNB SNN; do hook PostToolUse "$SE" $s Read '{}' >/dev/null; done   # link and event notes out of the way
 nreq(){ SWITCHBOARD_SESSION_ID="${2:-SNA}" "$B" task request --to "$SE:builder" --subject "$1" --key "$1" --kind build --link "$LN" --no-sign | awk '{print $1}'; }
 NCUR="$SWITCHBOARD_DIR/tasks/build-farm--builder/cursor-east.json"
+setscope(){ jq --arg s "$1" '.scope = $s' "$SWITCHBOARD_DIR/links/$LN.json" > "$T/ln" && mv "$T/ln" "$SWITCHBOARD_DIR/links/$LN.json"; }   # a request is refused when its link does not cover it, so a scope that stops covering is set after
 TN=$(nreq "PLAN-07 D1")
 out=$(hook PostToolUse "$SE" SNB Read '{}' | ctx); N0=$(date +%s)
 L1="switchboard: a task for you (you hold build-farm:builder): $TN \"PLAN-07 D1\" from build-farm:architect over link $LN (build), requested "
@@ -33,21 +34,21 @@ echo "$out" | grep -F -q "again: $L1" && [ "$(echo "$out" | grep -c "a task for 
   && ok "after the repeat it stops, however long the task stays unseen" || die "repeated a third time"
 SWITCHBOARD_SESSION_ID=SNB "$B" task "$TN" | has -x "  notified east [0-9:]*; seen east [0-9:]*" && jq -e ".seen[\"$TN\"] and .notified[\"$TN\"]" "$NCUR" >/dev/null \
   && ! "$B" tasks --for "$SE:builder" | grep "^$TN " | has unseen && ok "board task <tid> from the holder's session marks it seen, and the requester sees notified then seen" || die "read by holder: $(cat "$NCUR")"
-TS=$(nreq "PLAN-07 D2 seen"); SWITCHBOARD_SESSION_ID=SNB "$B" task seen "$TS" >/dev/null
-TC=$(nreq "PLAN-07 D2 cancel"); SWITCHBOARD_SESSION_ID=SNA "$B" task cancel "$TC" >/dev/null
-TO=$(nreq "PLAN-07 D2 own" SNB)
+TS=$(nreq "PLAN-07: D2 seen"); SWITCHBOARD_SESSION_ID=SNB "$B" task seen "$TS" >/dev/null
+TC=$(nreq "PLAN-07: D2 cancel"); SWITCHBOARD_SESSION_ID=SNA "$B" task cancel "$TC" >/dev/null
+TO=$(SWITCHBOARD_SESSION_ID=SNB "$B" task request --to "$SE:builder" --subject "PLAN-07: D2 own" --key own --no-sign | awk '{print $1}')   # no link: it is not the link's from
 [ "$(jq -r .requester.role "$SWITCHBOARD_DIR/tasks/build-farm--builder/$TO/000-request.json")" = builder ] || die "setup: $TO was not requested as build-farm:builder"
 out=$(hook PostToolUse "$SE" SNB Read '{}' | ctx); ! echo "$out" | has "a task for you" && jq -e ".notified | has(\"$TS\") or has(\"$TC\") or has(\"$TO\") | not" "$NCUR" >/dev/null \
   && ok "a task already seen, a cancelled task and a task this session requested are not notified" || die "notified a seen, cancelled or own task: $out"
-TW=$(nreq "PLAN-07 D2 worked"); SWITCHBOARD_SESSION_ID=SNB "$B" task working "$TW" >/dev/null || die "setup: SNB could not move $TW to working"
-TX=$(nreq "PLAN-07 D2 sub"); ! AID=a1 pre PostToolUse "$SE" SNB tx1 Read '{}' | ctx | has "a task for you" && hook PostToolUse "$SE" SNB Read '{}' | ctx | has "a task for you.*$TX" \
+TW=$(nreq "PLAN-07: D2 worked"); SWITCHBOARD_SESSION_ID=SNB "$B" task working "$TW" >/dev/null || die "setup: SNB could not move $TW to working"
+TX=$(nreq "PLAN-07: D2 sub"); setscope "docs only"; ! AID=a1 pre PostToolUse "$SE" SNB tx1 Read '{}' | ctx | has "a task for you" && hook PostToolUse "$SE" SNB Read '{}' | ctx | has "a task for you.*$TX" \
   && ok "a subagent's tool call never takes the note; the main thread's next call gets it, and not for a task already in working" || die "subagent took the note"
 out=$(hook PostToolUse "$SE" SNB Read '{}' | ctx); ! echo "$out" | has "a task for you.*$TW" || die "a working task was notified"
 resid "$PNB" SNB2; out=$(python3 -c "import json; print(json.dumps({'hook_event_name':'SessionStart','source':'clear','cwd':'$SE','session_id':'SNB2'}))" | "$B" hook | ctx)
 echo "$out" | grep -F -q "task for you (you hold build-farm:builder): $TX " && [ "$(echo "$out" | grep -c "a task for you")" = 1 ] && ! echo "$out" | has "^again:" && echo "$out" | has "^Link $LN does not cover this request (scope does not name the subject)" && ok "a new session holding the address gets each unseen task on its SessionStart" || die "SessionStart after clear ($(echo "$out" | grep -c "a task for you") task blocks, TX $TX): $(echo "$out" | tr '\n' '|')"
 SWITCHBOARD_SESSION_ID=SNN "$B" role builder --take >/dev/null; out=$(hook PostToolUse "$SE" SNN Bash '{"command":"board role builder --take"}' | ctx)
 echo "$out" | has "a task for you.*$TX" && [ -z "$(hook PostToolUse "$SE" SNB2 Read '{}' | ctx | grep "a task for you")" ] && ok "a session that takes the role later gets the outstanding task on its next hook call; the one that lost it gets nothing" || die "role taken later: $out"
-echo '{"tbad": {}}' > "$SWITCHBOARD_STATE/notified/SNN.json"; TB=$(nreq "PLAN-07 D2 broken"); out=$(hook PostToolUse "$SE" SNN Read '{}')
+setscope "PLAN-07 D1 and D2"; echo '{"tbad": {}}' > "$SWITCHBOARD_STATE/notified/SNN.json"; TB=$(nreq "PLAN-07: D2 broken"); out=$(hook PostToolUse "$SE" SNN Read '{}')
 echo "$out" | ctx | has "a task for you.*$TB" && echo "$out" | ctx | has "task $TB requested" && grep -qE " _sharded _sharded:[0-9]+ malformed notified/SNN.json" "$SWITCHBOARD_STATE/errors.log" \
   && jq -e "(has(\"tbad\") | not) and has(\"$TB\") and ([.[] | .ts | numbers] | length) == length" "$SWITCHBOARD_STATE/notified/SNN.json" >/dev/null \
   && ok "a marker entry of the wrong shape is dropped and logged with function:line, the task note still arrives, and the file is written clean" || die "failure path: $out / $(cat "$SWITCHBOARD_STATE/errors.log" 2>/dev/null)"
