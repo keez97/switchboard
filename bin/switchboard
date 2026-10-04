@@ -4747,9 +4747,9 @@ def task_transition(a):
     if a.artifact and state != "completed":
         sys.exit("switchboard: --artifact goes with completed only. Nothing was written.")
     reg = registry()
-    seq, wrote = write_state(d, recs, req, sess, state, note, [artifact(r, reg) for r in a.artifact],
-                             a.waiting_on or OWNER.lower())  # lowercase, as the records before the config file have it
-    wrote or sys.exit("switchboard: another transition of task %s took number %03d first. Nothing was written; rerun." % (req["id"], seq))
+    seq, why = write_state(d, req, sess, state, note, [artifact(r, reg) for r in a.artifact],
+                           a.waiting_on or OWNER.lower())  # lowercase, as the records before the config file have it
+    why and sys.exit("switchboard: " + why)
     print("%s %03d %s" % (req["id"], seq, state))
 
 
@@ -4772,30 +4772,66 @@ def task_transitions(a, tids):
         sys.exit(1)
 
 
-def write_state(d, recs, req, sess, state, note, arts=(), waiting_on=""):
-    """The worker's next numbered record for a task, its event and a sync: (the number, whether this call wrote it).
-    The caller has checked who may write."""
-    seq = max(int(n[:3]) for n, _, _ in recs if re.match(r"\d{3}-", n)) + 1
-    rec = {"id": req["id"], "seq": seq, "state": state, "note": note, "artifacts": list(arts),
-           "session": sess["sessionId"] if sess else "", "machine": MACHINE, "ts": now()}
-    if state == "input-required":
-        rec["waiting_on"] = waiting_on
-    if not write_once(d / ("%03d-%s.json" % (seq, state)), rec):
-        return seq, False
+TASK_LOCK_WAIT = 5.0  # seconds a task write waits for another write of the same task here; a holder can wait TREE_WAIT
+
+
+@contextlib.contextmanager
+def task_lock(tid):
+    """STATE/task-locks/<tid>.lock held exclusive around one write of a task's state on this machine: read the
+    records, choose the next number, write it. Yields False while another writer holds it past TASK_LOCK_WAIT. With
+    no state dir to lock in it yields True and the write goes ahead unlocked, as before the lock (logged). Two
+    machines writing one number stay merge_task's to settle."""
+    f = None
+    try:
+        (STATE / "task-locks").mkdir(parents=True, exist_ok=True)
+        f = open(STATE / "task-locks" / (tid + ".lock"), "a")
+    except OSError as e:
+        log_error("task_lock", e)
+    try:
+        yield flock_wait(f, fcntl.LOCK_EX, TASK_LOCK_WAIT) if f else True
+    finally:
+        if f:
+            f.close()
+
+
+def write_state(d, req, sess, state, note, arts=(), waiting_on=""):
+    """The worker's next numbered record for a task, its event and a sync: (the number, '') when this call wrote it,
+    else (the number, why nothing was written). Under the task's lock the records are read again: a task that went
+    final or got a bad record meanwhile takes nothing. The caller has checked who may write."""
+    with task_lock(d.name) as locked:
+        recs = task_records(d)
+        seq = max([int(n[:3]) for n, _, _ in recs if re.match(r"\d{3}-", n)] or [0]) + 1
+        race = "another transition of task %s took number %03d first. Nothing was written; rerun." % (req["id"], seq)
+        if not locked:
+            return seq, race
+        bad = [n for n, r, _ in recs if not r]
+        if bad:
+            return seq, "task %s has a record that is not valid JSON (%s). Nothing was written. Tell %s." % (
+                req["id"], ", ".join(bad), OWNER)
+        st = task_state(recs)
+        if st in TERMINAL:
+            return seq, "task %s is %s, which is final. Nothing was written." % (req["id"], st)
+        rec = {"id": req["id"], "seq": seq, "state": state, "note": note, "artifacts": list(arts),
+               "session": sess["sessionId"] if sess else "", "machine": MACHINE, "ts": now()}
+        if state == "input-required":
+            rec["waiting_on"] = waiting_on
+        if not write_once(d / ("%03d-%s.json" % (seq, state)), rec):
+            return seq, race
     task_event(req, state, note, "task%s%d" % (req["id"], seq), sess)
     sync(pull=False)
-    return seq, True
+    return seq, ""
 
 
 def close_report(d, req, sess):
     """A report (--kind report) is read when its worker reads it: the worker's CLI completes it, so only the worker
-    writes state. The number of the completed record, or 0 for a task that is no report, is final already, or whose
-    next number another transition took."""
+    writes state. The number of the completed record, or 0 for a task that is no report, is final already (checked
+    again under the task's lock, so a transition the worker wrote meanwhile stands), or whose next number another
+    transition took."""
     recs = task_records(d)
     if req.get("kind") != "report" or task_state(recs) in TERMINAL or any(not r for _, r, _ in recs):
         return 0
-    seq, wrote = write_state(d, recs, req, sess, "completed", "report read")
-    return seq if wrote else 0
+    seq, why = write_state(d, req, sess, "completed", "report read")
+    return 0 if why else seq
 
 
 def task_cancel(a):

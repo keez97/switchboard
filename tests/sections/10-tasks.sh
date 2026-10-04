@@ -75,6 +75,23 @@ hook PostToolUse "$T/delta" S11 Read '{}' | has "task $R1 completed: status one 
 f3=$(ls "$RD/$R2" | tr '\n' ' '); wk "$R2" >/dev/null; wk seen "$R2" | has -x "$R2 already seen by east; nothing written" && [ "$(ls "$RD/$R2" | tr '\n' ' ')" = "$f3" ] && ok "a report that is already terminal is left alone" || die "terminal report rewritten"
 RH=$(rp "status hooked" r6); out=$(hook PostToolUse "$T/eps" S6 Read '{}'); echo "$out" | has "a task for you.*$RH" && [ "$(ls "$RD/$RH")" = "000-request.json" ] && ok "the hook's task note is a notice and does not close a report" || die "hook note closed or missed a report: $out"
 wk rejected "$RH" >/dev/null
+# the worker rejects a report while its own read of it would complete it; the tree lock held 2 s widens the window.
+# One record wins, and a read never completes a report after the rejection
+won=""
+for i in 1 2 3; do
+  R=$(rp "race $i" race$i); hold "$SWITCHBOARD_STATE/tree.lock" 2
+  wk rejected "$R" --note "not mine" > "$T/rej.out" 2>&1 & a=$!
+  wk "$R" > /dev/null 2>&1 & b=$!
+  wait $a && rj=0 || rj=$?; wait $b || true
+  recs=$(cd "$RD/$R" && ls | grep -v '^000-' | tr '\n' ' ')
+  if [ "$rj" = 0 ]; then
+    [ "$recs" = "001-rejected.json " ] && has -x "$R 001 rejected" < "$T/rej.out" && "$B" task "$R" | has "^$R  rejected " && won="$won r" || won="$won BAD($recs: $(cat "$T/rej.out"))"
+  else
+    [ "$recs" = "001-completed.json " ] && has -x "switchboard: task $R is completed, which is final. Nothing was written." < "$T/rej.out" && won="$won c" || won="$won BAD($recs: $(cat "$T/rej.out"))"
+  fi
+done
+! echo "$won" | grep -q BAD && ok "a rejection racing the worker's read of its report: one record wins, a stated rejection stands ($won )" || die "rejection and read raced:$won"
+[ ! -s "$SWITCHBOARD_STATE/errors.log" ] || die "race: errors logged: $(cat "$SWITCHBOARD_STATE/errors.log")"
 RO=$(SWITCHBOARD_NOW=$(( $(date +%s) - 8*3600 )) SWITCHBOARD_SESSION_ID=S5 "$B" task request --to "$T/eps:builder" --kind report --subject "old report" --key r4 | awk '{print $1}')
 RN=$(SWITCHBOARD_NOW=$(( $(date +%s) - 8*3600 )) SWITCHBOARD_SESSION_ID=S5 "$B" task request --to "$T/eps:builder" --kind eval --subject "old eval" --key r5 | awk '{print $1}')
 "$B" tasks --stale | has "^$RO " && wk "$RO" >/dev/null && wk seen "$RN" | has -x "$RN seen by east" && out=$("$B" tasks --stale) && ! echo "$out" | has "^$RO " && echo "$out" | has "^$RN  submitted" && ok "tasks --stale lists a report until its worker reads it, and a seen task of another kind stays open and stale" || die "stale with reports: $("$B" tasks --stale)"
