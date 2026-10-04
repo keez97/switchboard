@@ -78,6 +78,25 @@ out=$(under E2 "\"$B\" who" 2>&1 >/dev/null)
 [ -z "$out" ] && [ "$(pid_of)" = "$E2" ] && ok "reopened, plugins reloaded mid-session, PostToolUse alone: the record names the new process and no warning" || die "resume, PostToolUse: pid $(pid_of), want $E2: $out"
 python3 "$FC" quit "$T/fc-E2.sock"
 
+# the state dir does not exist and cannot be created (its parent is read-only): the hooks run and cannot record the
+# process. status names the state dir; the warning stays off, as it does for an existing state dir that is read-only
+mkdir -p "$T/ro"; chmod 555 "$T/ro"
+F=$(claude F sF)
+for e in SessionStart PostToolUse; do
+  printf '{"hook_event_name": "%s", "cwd": "%s", "session_id": "sF", "tool_name": "Read", "tool_input": {}, "tool_use_id": "u1"}' "$e" "$T/alpha" \
+    | SWITCHBOARD_STATE="$T/ro/state" python3 "$FC" run "$T/fc-F.sock" "$T/alpha" "\"$B\" hook" >/dev/null 2>&1 || true
+done
+[ ! -e "$T/ro/state" ] || die "setup: the state dir was created under a read-only parent"
+out=$(SWITCHBOARD_STATE="$T/ro/state" python3 "$FC" run "$T/fc-F.sock" "$T/alpha" "\"$B\" who" 2>&1 >/dev/null </dev/null)
+! echo "$out" | grep -q "without switchboard" && ok "a state dir that cannot be created: no hookless warning" || die "warned with no state dir: $out"
+SWITCHBOARD_STATE="$T/ro/state" python3 "$FC" run "$T/fc-F.sock" "$T/alpha" "\"$B\" status" 2>/dev/null </dev/null | has "$T/ro/state" \
+  && ok "status names the state dir it cannot write" || die "status: $(SWITCHBOARD_STATE="$T/ro/state" under F "\"$B\" status" 2>&1)"
+chmod 755 "$T/ro"
+mkdir -p "$T/rw"
+out=$(SWITCHBOARD_STATE="$T/rw/state" python3 "$FC" run "$T/fc-F.sock" "$T/alpha" "\"$B\" who" 2>&1 >/dev/null </dev/null)
+echo "$out" | has "$WARN" && ok "a state dir not there yet whose parent is writable: no hook ran, the warning shows" || die "no warning, creatable state dir: $out"
+python3 "$FC" quit "$T/fc-F.sock"
+
 # the desktop app's copy: --plugin-dir names a switchboard plugin with no hooks/hooks.json
 claude B sB --model x --plugin-dir "$T/other" --plugin-dir "$T/inline" >/dev/null
 under B "\"$B\" who" 2>&1 >/dev/null | has "$WARN Cause: $T/inline has no hooks/hooks\.json\.$" && ok "--plugin-dir <dir> with no hooks folder: the warning names it" || die "cause: $(under B "\"$B\" who" 2>&1 >/dev/null)"

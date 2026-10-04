@@ -4237,6 +4237,14 @@ def argv_of(pid):
         return []
 
 
+def existing(p):
+    """p, or its nearest parent that exists: the dir whose permissions decide whether p can be written or created."""
+    p = Path(p).absolute()
+    while not p.exists() and p.parent != p:
+        p = p.parent
+    return p
+
+
 def warn_hookless(d=None):
     """For CLI calls: one line on stderr when the calling session d (own_session() when not given) runs without
     switchboard's hooks. Session start, prompts, PostToolUse and Stop record the session's process in STATE/claude/,
@@ -4254,7 +4262,7 @@ def warn_hookless(d=None):
         # process) says nothing about this one
         if isinstance(rec, dict) and str(rec.get("pid")) == str(d["pid"]) \
                 and (not rec.get("procStart") or rec["procStart"] == proc_start(d["pid"])) \
-                or (STATE.is_dir() and not os.access(STATE, os.W_OK)):
+                or not os.access(existing(STATE), os.W_OK):
             return  # the hooks ran in this process, or ran and could not write: status names that case
         line = ('switchboard: this session runs without switchboard\'s hooks (no notes, holds, link headers or wake). '
                 'Desktop over SSH: set "switchboard@inline": false in the host\'s ~/.claude/settings.json, then '
