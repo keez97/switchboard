@@ -43,4 +43,18 @@ syncw east; syncw west
 [ -f "$T/clone-west/tasks/eps--builder/$RT/000-request.sig" ] && on west "$B" task "$RT" | has -x "  signed by east" && perl -pi -e 's/round trip/round trip!/' "$T/clone-west/tasks/eps--builder/$RT/000-request.json" && on west "$B" task "$RT" | has -x "  BAD SIGNATURE" && ok "a request signed on one machine verifies on the other after sync, and a change on the way shows BAD SIGNATURE" || die "signed round trip: $(on west "$B" task "$RT")"
 git -C "$T/clone-west" checkout -q -- "tasks/eps--builder/$RT/000-request.json"
 
+# a bulk close of 20 tasks while each push takes 2 s: one sync after the loop, so no record is left out of the commit
+# (a job per task gave up while the first one pushed, leaving the later records uncommitted until a later sync)
+idle(){ local n=0; while held "$T/state-$1/sync-job.lock" && [ $n -lt 120 ]; do python3 -c "import time; time.sleep(0.5)"; n=$((n+1)); done; }
+ids=""; for i in $(seq 20); do ids="$ids $(cd "$T" && on east "$B" task request --to "$T/eps:builder" --subject "bulk $i" --key bk$i --no-sign 2>/dev/null | awk '{print $1}')"; done
+idle east; syncw east; idle east
+printf '#!/bin/sh\nsleep 2\nexec git receive-pack "$@"\n' > "$T/slow-rp"; chmod +x "$T/slow-rp"; git -C "$T/clone-east" config remote.origin.receivepack "$T/slow-rp"
+# shellcheck disable=SC2086  # one word per task id
+rm -f "$T/state-east/sync.ok"; out=$(cd "$T/eps" && on east "$B" task completed $ids --note bulk 2>&1)
+waitfor "$T/state-east/sync.ok"; idle east; git -C "$T/clone-east" config --unset remote.origin.receivepack
+left=$(git -C "$T/clone-east" status --porcelain); n=$(git -C "$T/two.git" ls-tree -r --name-only main | grep -c '/001-completed.json$' || true)
+[ "$(echo "$out" | grep -c ' 001 completed$')" = 20 ] && [ -z "$left" ] && [ "$n" = 20 ] \
+  && ok "a bulk close of 20 tasks with a slow push: once the sync ends no record is left uncommitted and all 20 are pushed" \
+  || die "bulk sync: $(echo "$out" | grep -c ' 001 completed$') closed, left [$left], pushed $n"
+
 finish

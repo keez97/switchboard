@@ -4760,19 +4760,26 @@ def task_transitions(a, tids):
     if len(tids) > 1 and a.artifact:
         sys.exit("switchboard: --artifact goes with one task, and %d were given. Nothing was written." % len(tids))
     refused = 0
-    for tid in tids or [None]:  # none given: task_transition refuses it as it always did
-        a.tid = tid
-        try:
-            task_transition(a)
-        except SystemExit as e:
-            if len(tids) < 2:
-                raise
-            refused += 1
-            print("switchboard: task %s: %s" % (tid, re.sub(r"^switchboard: ", "", str(e.code))), file=sys.stderr)
+    _SYNC_LATER[0] = len(tids) > 1  # one sync after the loop: a job started per task gives up while another runs
+    try:
+        for tid in tids or [None]:  # none given: task_transition refuses it as it always did
+            a.tid = tid
+            try:
+                task_transition(a)
+            except SystemExit as e:
+                if len(tids) < 2:
+                    raise
+                refused += 1
+                print("switchboard: task %s: %s" % (tid, re.sub(r"^switchboard: ", "", str(e.code))), file=sys.stderr)
+    finally:
+        if _SYNC_LATER[0] == "due":
+            sync(pull=False)
+        _SYNC_LATER[0] = False
     if refused:
         sys.exit(1)
 
 
+_SYNC_LATER = [False]  # True in a bulk transition, "due" once one of its tasks was written
 TASK_LOCK_WAIT = 5.0  # seconds a task write waits for another write of the same task here; a holder can wait TREE_WAIT
 
 
@@ -4819,7 +4826,10 @@ def write_state(d, req, sess, state, note, arts=(), waiting_on=""):
         if not write_once(d / ("%03d-%s.json" % (seq, state)), rec):
             return seq, race
     task_event(req, state, note, "task%s%d" % (req["id"], seq), sess)
-    sync(pull=False)
+    if _SYNC_LATER[0]:
+        _SYNC_LATER[0] = "due"  # a bulk transition syncs once, after its last task
+    else:
+        sync(pull=False)
     return seq, ""
 
 
