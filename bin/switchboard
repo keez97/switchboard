@@ -4130,7 +4130,8 @@ def remember_process(session, recheck=False):
     if not sid:
         return None
     rec = _remember_session(session, sid, recheck)
-    mark_process(sid)
+    if rec or os.access(existing(PROCS), os.W_OK):  # a state dir it cannot write: the session's record logged that
+        mark_process(sid)
     return rec
 
 
