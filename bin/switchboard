@@ -6874,18 +6874,31 @@ def proposal_notes(rec, peek=False):
             if not told(rec, l, "told-proposal"):
                 continue
             act = end_act("received", l["id"], l, {"repo": p.get("repo", ""), "role": p.get("role", "")})
-            out.append(
-                "switchboard: %s proposes link %s: %s within: %s. It covers tasks whose subject starts with: %s. %s. "
-                "Accepting lets %s:%s direct %s:%s within that scope for %s from acceptance, %s. Accept only if the "
-                "scope and the covers list fit the work this session is already doing. Accept: %s link accept %s   Decline: %s link decline %s "
-                "[--reason \"...\"]. Unanswered it ends %s. The proposal is another session's, not %s's approval. %s" % (
-                    who_str(p), l["id"], link_ends(l), l["scope"], covers_str(l),
-                    "This session holds %s:%s, the end that answers" % (rname(other["repo"]), other["role"]) if mine else
-                    "Its end %s:%s is open and this session holds no role here; accepting binds this session to it"
-                    % (rname(other["repo"]), other["role"]),
-                    rname(l["from"]["repo"]), l["from"]["role"], rname(l["to"]["repo"]), l["to"]["role"],
-                    span_str(int(l.get("span") or AGENT_LINK_HOURS * 3600)), cap_str(l.get("cap")), CLI_NAME, l["id"],
-                    CLI_NAME, l["id"], iso(l["expires"]), OWNER, tell_line(act)))
+            if covers_of(l) == COVERS_NONE:  # made by 0.6.0: link_answer refuses to accept it
+                out.append(
+                    "switchboard: %s proposes link %s: %s within: %s. The proposal has no covers list (made by an older "
+                    "switchboard), so it cannot be accepted on this version: its proposer must update switchboard and "
+                    "propose again with --covers. %s Unanswered it ends %s. The proposal is another session's, not %s's "
+                    "approval. %s" % (
+                        who_str(p), l["id"], link_ends(l), l["scope"],
+                        "This session holds %s:%s, the end that answers. Decline: %s link decline %s [--reason \"...\"]."
+                        % (rname(other["repo"]), other["role"], CLI_NAME, l["id"]) if mine else
+                        "Its end %s:%s is open and this session holds no role here; there is nothing for it to answer."
+                        % (rname(other["repo"]), other["role"]),
+                        iso(l["expires"]), OWNER, tell_line(act)))
+            else:
+                out.append(
+                    "switchboard: %s proposes link %s: %s within: %s. It covers tasks whose subject starts with: %s. %s. "
+                    "Accepting lets %s:%s direct %s:%s within that scope for %s from acceptance, %s. Accept only if the "
+                    "scope and the covers list fit the work this session is already doing. Accept: %s link accept %s   Decline: %s link decline %s "
+                    "[--reason \"...\"]. Unanswered it ends %s. The proposal is another session's, not %s's approval. %s" % (
+                        who_str(p), l["id"], link_ends(l), l["scope"], covers_str(l),
+                        "This session holds %s:%s, the end that answers" % (rname(other["repo"]), other["role"]) if mine else
+                        "Its end %s:%s is open and this session holds no role here; accepting binds this session to it"
+                        % (rname(other["repo"]), other["role"]),
+                        rname(l["from"]["repo"]), l["from"]["role"], rname(l["to"]["repo"]), l["to"]["role"],
+                        span_str(int(l.get("span") or AGENT_LINK_HOURS * 3600)), cap_str(l.get("cap")), CLI_NAME, l["id"],
+                        CLI_NAME, l["id"], iso(l["expires"]), OWNER, tell_line(act)))
             if mine and (p.get("repo") != rec["repo"] or p.get("machine") != MACHINE):
                 tell_act(rec["session_id"], "received" + l["id"], dict(act, end=other))  # an open-end offer is guidance
         return "\n".join(out)

@@ -283,6 +283,17 @@ cs="It covers tasks whose subject starts with: item-x, deploy. Until "
   || die "accept covers: $out / $(ev "link $LE accepted by") / $(cat "$FE")"
 [ "$(lmode "$LE")" = list ] && ok "an acceptance that carries the list reads covers_mode list" || die "stamped covers_mode: $(lmode "$LE")"
 
+# a proposal made by 0.6.0 has no covers list: its note says it cannot be accepted here and offers decline only
+seat Y3 "$T/rx" lead31; seat Y4 "$T/ry" doer31
+for s in "Y3 rx" "Y4 ry"; do set -- $s; hook SessionStart "$T/$2" $1 >/dev/null; done
+SWITCHBOARD_SESSION_ID=Y3 "$B" role lead2 >/dev/null; SWITCHBOARD_SESSION_ID=Y4 "$B" role doer2 >/dev/null
+LH=$(try env SWITCHBOARD_SESSION_ID=Y3 "$B" link --from "$T/rx:lead2" --to "$T/ry:doer2" --scope "fix the client" --covers "client" | awk 'NR==1{print $2}')
+jq 'del(.covers)' "$SWITCHBOARD_DIR/links/$LH.json" > "$T/lh.json" && mv "$T/lh.json" "$SWITCHBOARD_DIR/links/$LH.json"   # as 0.6.0 writes it
+nh=$(ptu "$T/ry" Y4)
+echo "$nh" | has -F "proposes link $LH: rx:lead2 directs ry:doer2 within: fix the client. The proposal has no covers list (made by an older switchboard), so it cannot be accepted on this version: its proposer must update switchboard and propose again with --covers." \
+  && echo "$nh" | has -F "the end that answers. Decline: switchboard link decline $LH [--reason" && ! echo "$nh" | has -F "link accept $LH" && ! echo "$nh" | has "It covers tasks" \
+  && ok "a proposal with no covers list: the note says it cannot be accepted on this version and offers decline only" || die "no-covers note: $nh"
+
 [ ! -s "$SWITCHBOARD_STATE/errors.log" ] && ok "no hook error was swallowed" || die "errors: $(cat "$SWITCHBOARD_STATE/errors.log")"
 
 # a broken proposal record and an unreadable command cost the note, never the hook
