@@ -227,6 +227,26 @@ bash -c "$fix" && [ "$(jv "$E1")" = ok ] && ! "$B" status | has "lists this mach
   && ok "once the owner runs it the old requests are ok, and status prints it no more" || die "recovered: $(jv "$E1"); $(cat "$AS")"
 unset SWITCHBOARD_TEST_PROPOSE
 
+# ---- a key init cannot give the new name: init still finishes the move and leaves no partial key file
+cfg(){ python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["machine"])' "$HOME/.config/switchboard/config.json"; }
+cp "$S/switchboard_ash" "$T/ash.key"; chmod 000 "$S/switchboard_ash"   # ash's key unreadable, and no hard links
+out=$(SWITCHBOARD_TEST_NOLINK=1 "$B" init --update --machine fir 2>&1) && rc=0 || rc=$?
+chmod 600 "$S/switchboard_ash"
+[ "$rc" = 0 ] && ! echo "$out" | has Traceback && echo "$out" | has "^switchboard: the key of ash was not given to fir (Permission denied" \
+  && [ "$(cfg)" = fir ] && [ -f "$D/machines/fir.json" ] && [ ! -e "$D/machines/ash.json" ] \
+  && [ -s "$S/switchboard_fir" ] && ssh-keygen -y -f "$S/switchboard_fir" >/dev/null 2>&1 && ! cmp -s "$S/switchboard_fir" "$T/ash.key" \
+  && ! ls -a "$S" | grep -q '\.tmp$' && echo "$out" | has -x "  key      ~/.ssh/switchboard_fir (made now)" \
+  && ok "an unreadable old key: init says so in one line, leaves no empty key file, makes a new key and moves the records" \
+  || die "unreadable key: rc $rc; $(cfg); $(ls -la "$S"); $out"
+chmod 500 "$S"   # ~/.ssh not writable
+out=$("$B" init --update --machine gum 2>&1) && rc=0 || rc=$?
+chmod 700 "$S"
+[ "$rc" = 0 ] && ! echo "$out" | has Traceback && echo "$out" | has "^switchboard: the key of fir was not given to gum (Permission denied" \
+  && [ "$(cfg)" = gum ] && [ -f "$D/machines/gum.json" ] && [ ! -e "$D/machines/fir.json" ] && [ ! -e "$S/switchboard_gum" ] \
+  && echo "$out" | has -x "  key      none" && echo "$out" | has "^  records  moved from the machine name fir to gum" \
+  && ok "~/.ssh not writable: init finishes, the config and the records both say the new name, and it says there is no key" \
+  || die "read-only ~/.ssh: rc $rc; $(cfg); $(ls "$D/machines"); $out"
+
 # ---- a name keys/allowed_signers gives to a key this machine does not have is another machine's: nothing moves
 mkdir -p "$D/keys"; ssh-keygen -q -t ed25519 -N "" -f "$T/westkey" -C west
 echo "west namespaces=\"switchboard-task\" $(cut -d' ' -f1,2 "$T/westkey.pub")" > "$D/keys/allowed_signers"

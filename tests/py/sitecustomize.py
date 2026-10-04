@@ -40,3 +40,13 @@ if _platform:
     import platform
 
     platform.system = lambda: _platform
+
+# SWITCHBOARD_TEST_NOLINK=1: os.link raises OSError, as on a file system with no hard links, so init's rename takes
+# the copy path of reuse_key (41-machine-rename.sh)
+if os.environ.get("SWITCHBOARD_TEST_NOLINK"):
+    import errno
+
+    def _nolink(*a, **k):
+        raise OSError(errno.EXDEV, "test fault: no hard links")
+
+    os.link = _nolink

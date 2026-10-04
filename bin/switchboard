@@ -3079,20 +3079,34 @@ def reuse_key(old, new):
     its .pub to old's .pub (a copy, the key mode 600, where a link cannot be made). The key line printed for new then
     carries old's key, and the owner's line for it is the proof the two names are one machine (aliases). Nothing is
     moved: a rename back still finds old's key, and move_machine reads it. '' when new has a key already or old has
-    none, else what was done."""
+    none, else what was done. Never raises: a key it cannot link or copy (~/.ssh not writable, old's key unreadable)
+    is one line on stderr, and signing_key then makes a new key or says why not. A copy is read whole first and
+    written under a temporary name, so it never leaves a partial file that would block signing_key."""
     src = key_file(old)
     if not src or key_file(new):
         return ""
     dst, how = HOME / ".ssh" / ("switchboard_%s" % new), "linked"
-    for a, b, mode in ((src, dst, 0o600), (src.with_name(src.name + ".pub"), dst.with_name(dst.name + ".pub"), 0o644)):
-        if not a.exists() or b.exists():
-            continue
-        try:
-            os.link(a, b)
-        except OSError:
-            how = "copied"
-            with os.fdopen(os.open(b, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode), "wb") as w:
-                w.write(a.read_bytes())
+    try:
+        for a, b, mode in ((src, dst, 0o600), (src.with_name(src.name + ".pub"), dst.with_name(dst.name + ".pub"), 0o644)):
+            if not a.exists() or b.exists():
+                continue
+            try:
+                os.link(a, b)
+                continue
+            except OSError:
+                how = "copied"
+            data, tmp = a.read_bytes(), b.with_name(".%s.%d.tmp" % (b.name, os.getpid()))
+            try:
+                with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode), "wb") as w:
+                    w.write(data)
+                os.replace(tmp, b)
+            finally:
+                if os.path.lexists(tmp):
+                    os.unlink(tmp)
+    except OSError as e:
+        print("switchboard: the key of %s was not given to %s (%s: %s)" % (old, new, e.strerror or e, tilde(e.filename or src)),
+              file=sys.stderr)
+        return "%s from %s" % (how, tilde(src)) if dst.exists() else ""
     return "%s from %s" % (how, tilde(src))
 
 
