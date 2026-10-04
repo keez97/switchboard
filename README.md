@@ -133,6 +133,18 @@ switchboard init --always-on --remove
 
 Run your sessions in bypass permissions. Claude Code holds a message from another session for your approval when the two run in different permission modes, and in auto mode the classifier can stop switchboard commands. Notes, holds and tasks work in any mode.
 
+## Desktop sessions over SSH
+
+The Claude desktop app can run a session on another machine over SSH. It copies each plugin to that host and starts Claude Code with `--plugin-dir` set to the copy. The app's copy of switchboard has no `hooks/` folder, loads as `switchboard@inline` and replaces the installed plugin. That session runs with no switchboard hooks: no notes, no hold refusals, no link headers and no wake. `switchboard role`, `who` and `status` print a warning on stderr when they run in such a session.
+
+To fix it on the host:
+
+1. Install the plugin there, as under Install.
+2. Add `"switchboard@inline": false` to `enabledPlugins` in the host's `~/.claude/settings.json`.
+3. Run `/reload-plugins` in each running session.
+
+The installed plugin then loads with its hooks. The setting also hides any `--plugin-dir` copy of switchboard you pass yourself. To load one anyway, override the setting for that command: `claude --plugin-dir <dir> --settings '{"enabledPlugins":{"switchboard@inline":true}}'`. Claude Code issue [#83643](https://github.com/anthropics/claude-code/issues/83643) tracks the missing hooks.
+
 ## Links
 
 A link is a directed pair of addresses with a scope and an end date. Two sessions can make one: one proposes, the other accepts or declines.

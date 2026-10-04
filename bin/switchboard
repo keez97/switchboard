@@ -4198,6 +4198,44 @@ def own_session():
     return None
 
 
+def argv_of(pid):
+    """The command line of a running process as a list, or []. On macOS ps gives one line, split on spaces."""
+    try:
+        if platform.system() == "Linux":
+            return [x.decode(errors="replace") for x in Path("/proc/%d/cmdline" % int(pid)).read_bytes().split(b"\0") if x]
+        r = subprocess.run(["ps", "-o", "args=", "-p", str(int(pid))], capture_output=True, text=True, timeout=3)
+        return r.stdout.split()
+    except Exception:
+        return []
+
+
+def warn_hookless(d):
+    """For CLI calls: one line on stderr when the calling session d (own_session()) runs without switchboard's hooks.
+    Every hook event but the guard's records the session's process in STATE/claude/, so a session found by its
+    session file with no record there has no hooks: the desktop app's --plugin-dir copy of the plugin over SSH has
+    no hooks folder and replaces the installed plugin. Reads only; a test that asks for no walk gets no warning."""
+    if not d or (board_env("ALLOW_TMP") and board_env("NOWALK")) or board_env("OFF"):
+        return
+    try:
+        if (PROCS / (slug(d["sessionId"]) + ".json")).exists() or (STATE.is_dir() and not os.access(STATE, os.W_OK)):
+            return  # the hooks ran, or ran and could not write: status names that case
+        line = ('switchboard: this session runs without switchboard\'s hooks (no notes, holds, link headers or wake). '
+                'Desktop over SSH: set "switchboard@inline": false in the host\'s ~/.claude/settings.json, then '
+                '/reload-plugins. See README "Desktop sessions over SSH".')
+        args = argv_of(d["pid"])
+        dirs = [args[i + 1] for i, x in enumerate(args[:-1]) if x == "--plugin-dir"] + \
+            [x.split("=", 1)[1] for x in args if x.startswith("--plugin-dir=")]
+        for p in dirs:
+            p = Path(d.get("cwd") or "/") / os.path.expanduser(p)  # an absolute path stays as it is
+            pj = load(p / ".claude-plugin" / "plugin.json", None)
+            if isinstance(pj, dict) and pj.get("name") == "switchboard" and not (p / "hooks" / "hooks.json").exists():
+                line += " Cause: %s has no hooks/hooks.json." % p
+                break
+        print(line, file=sys.stderr)
+    except Exception as e:
+        log_error("warn_hookless", e)
+
+
 def srec_path(machine, sid):
     return BOARD / "sessions" / ("%s-%s.json" % (machine, slug(sid)))
 
@@ -6783,6 +6821,7 @@ def main():
     elif a.cmd == "install-prepush":
         install_prepush(a.repo, a.remove)
     elif a.cmd == "who":
+        warn_hookless(own_session())
         reg = registry()
         rid = find_repo(a.repo, reg) if a.repo else None
         want = lambda r: (not rid or r["repo"] == rid) and (not a.role or r.get("role") == a.role)
@@ -6798,6 +6837,7 @@ def main():
             print("no live session" + (" for %s" % a.repo if a.repo else "") + (" with role %s" % a.role if a.role else ""))
     elif a.cmd == "role":
         d = own_session() or sys.exit("switchboard: cannot find the Claude session this command runs in")
+        warn_hookless(d)
         rid = repo_of(d.get("cwd") or os.getcwd())[0] or sys.exit("switchboard: this session is not in a git repo")
         rec = publish({"session_id": d["sessionId"], "repo": rid, "cwd": d.get("cwd", "")}, ident=d) or sys.exit("switchboard: no presence")
         cur = role_holder(rid, a.name)
@@ -6957,6 +6997,7 @@ def main():
             sys.exit("switchboard: --open takes --for <repo>:<role> alone, and --unseen and --json go with --open")
         task_open(a) if a.open else task_list(a)
     elif a.cmd == "status":
+        warn_hookless(own_session())
         reg = registry()
         print("board %s  machine %s  repos here %d  watches %d  live events %d  holds %d  live sessions %d  links %d" % (
             BOARD, MACHINE, len(reg), len(all_watches()), len(live_events()), len(active_holds()),
