@@ -5318,7 +5318,10 @@ def task_wait(a):
         # a change another machine pushed arrives on a later pass. The wait pulls every WAIT_PULL s of its own: the
         # machine's stamp, which any hook here refreshes, would leave it one pull a minute
         due = pulled is None or time.monotonic() - pulled >= WAIT_PULL
-        pull_due(force=due)
+        try:
+            pull_due(force=due)
+        except Exception:
+            pass  # no pull this pass (a state dir that cannot be written, say): the wait reads what is here, as a read does
         pulled = time.monotonic() if due else pulled
         time.sleep(min(WAIT_POLL, left) if limit else WAIT_POLL)
 

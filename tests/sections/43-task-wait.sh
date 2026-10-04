@@ -91,5 +91,12 @@ s=$(date +%s); out=$(on east "$B" task "$TV" --wait --timeout 30 2>&1) && rc=0 |
   && ok "with the pull stamp fresh and PULL_EVERY at its default, the wait pulls on its own cadence and sees another machine's change (${e}s)" \
   || die "own cadence: rc $rc after ${e}s: $out"
 wait
+# a state dir that cannot be written: the wait's pull is skipped and the wait goes on, as a plain read does
+TR=$(on east "$B" task request --to "$T/wrk:builder" --subject "read-only state" --key x3 --no-sign | awk '{print $1}')
+rm -f "$T/state-east/pull.stamp"; chmod 555 "$T/state-east"   # the pull must create its stamp
+s=$(date +%s); out=$(on east "$B" task "$TR" --wait --timeout 3 2>&1) && rc=0 || rc=$?; e=$(( $(date +%s) - s ))
+chmod 755 "$T/state-east"
+[ "$rc" = 1 ] && [ "$e" -ge 3 ] && echo "$out" | has "task $TR is still submitted after 3s" && ! echo "$out" | has "Traceback\|PermissionError" \
+  && ok "a state dir that cannot be written: the wait skips its pull and times out as usual, no traceback" || die "read-only state: rc $rc after ${e}s: $out"
 
 finish
