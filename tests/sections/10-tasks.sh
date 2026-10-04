@@ -132,6 +132,9 @@ out=$("$B" task "$RB6" "$RB7" t00000001 2>&1) && die "a read took three task ids
 [ "$out" = "switchboard: task <tid> takes one task id, and 3 were given. Nothing was written." ] && out=$("$B" task "$RB6" "$RB7" 2>&1) && die "a read took two task ids" || true
 [ "$out" = "switchboard: task <tid> takes one task id, and 2 were given. Nothing was written." ] && "$B" task "$RB6" "$RB6" | has "^$RB6  submitted " \
   && ok "a read of more than one task id is refused, naming task <tid> and counting every id; one id given twice reads it" || die "read with ids: $out"
+out=$(wk complete "$RB6" 2>&1) && die "a mistyped verb exited 0" || true
+[ "$out" = "switchboard: no task complete" ] && out=$(wk done "$RB6" "$RB7" --note x 2>&1) && die "a mistyped verb with two ids exited 0" || true
+[ "$out" = "switchboard: no task done" ] && ok "a mistyped verb (task complete <tid>) is refused as no task <word>, with one task id or two" || die "mistyped verb: $out"
 RS=$(SWITCHBOARD_SESSION_ID=S5 "$B" task request --to "$T/eps:builder" --subject "single" --key b8 | awk '{print $1}')
 out=$(wk working "$RS" --note one) && [ "$out" = "$RS 001 working" ] && out=$(wk working "$RB1" 2>&1) && die "single refusal exited 0" || true
 [ "$out" = "switchboard: task $RB1 is completed, which is final. Nothing was written." ] && ok "one task id prints and refuses exactly as before" || die "single tid output: $out"

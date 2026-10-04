@@ -7248,7 +7248,9 @@ def main():
             sys.exit("switchboard: --json goes with %s task <tid>, a read" % CLI_NAME)
         tids, a.tid = list(dict.fromkeys(a.tid)), (a.tid or [None])[0]
         verb = a.what in ("request", "seen", "cancel") or a.what in STATES
-        given = tids if verb else list(dict.fromkeys([a.what] + tids))  # a read: the first id is in a.what
+        # a read: the first id is in a.what. A word that is no verb and no task id (task complete tA) is left to the
+        # read, which says there is no such task
+        given = tids if verb else list(dict.fromkeys([a.what] + tids)) if re.fullmatch(r"t[0-9a-f]{8}", a.what) else []
         if len(given) > 1 and a.what not in STATES:
             sys.exit("switchboard: task %s takes one task id, and %d were given. Nothing was written." % (
                 a.what if verb else "<tid>", len(given)))
