@@ -5305,12 +5305,15 @@ def task_wait(a):
     signal.signal(signal.SIGTERM, lambda *_: os._exit(1))
     want = (a.until,) if a.until else TERMINAL
     limit, t0 = TASK_WAIT if a.timeout is None else a.timeout, time.monotonic()
-    pulled = None
+    pulled, unread = None, 0
     while True:
         st = task_state(task_records(d))
         if st in want:
             return task_show(tid, a.json)
-        if st == "?":  # a record that cannot be read: no later pass reads it either. Shown as a read shows it
+        unread = unread + 1 if st == "?" else 0
+        # a record that cannot be read on two looks in a row (one look could catch a pull writing the file): no later
+        # pass reads it either. Shown as a read shows it
+        if unread >= 2:
             print("switchboard: task %s has a record that cannot be read; its state is unknown" % tid, file=sys.stderr)
             try:
                 task_show(tid, a.json)

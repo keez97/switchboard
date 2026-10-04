@@ -51,9 +51,14 @@ kill -TERM $W; wait $W && rc=0 || rc=$?
 
 TX=$(mk 7); wk working "$TX" >/dev/null; echo 'not json' > "$SWITCHBOARD_DIR/tasks/eps--builder/$TX/002-completed.json"
 read_out=$("$B" task "$TX" 2>/dev/null) && die "a read of a bad record exited 0" || true
-s=$(date +%s); out=$("$B" task "$TX" --wait --timeout 6 2>"$T/err") && rc=0 || rc=$?; e=$(( $(date +%s) - s ))
-[ "$rc" = 1 ] && [ "$e" -lt 3 ] && [ "$out" = "$read_out" ] && has "has a record that cannot be read" < "$T/err" \
-  && ok "a task whose state cannot be read: the wait shows it as a read does and exits 1 at once" || die "unreadable state: rc $rc after ${e}s err [$(cat "$T/err")]"
+s=$(date +%s); out=$("$B" task "$TX" --wait --timeout 10 2>"$T/err") && rc=0 || rc=$?; e=$(( $(date +%s) - s ))
+[ "$rc" = 1 ] && [ "$e" -lt 6 ] && [ "$out" = "$read_out" ] && has "has a record that cannot be read" < "$T/err" \
+  && ok "a task whose state cannot be read: the wait shows it as a read does and exits 1 on its second look (${e}s)" || die "unreadable state: rc $rc after ${e}s err [$(cat "$T/err")]"
+# a record caught mid-write (a pull creating it) reads as bad once; the next look reads it and the wait goes on
+TY=$(mk 8); echo '{"id": "x", "seq' > "$SWITCHBOARD_DIR/tasks/eps--builder/$TY/001-completed.json"
+( python3 -c "import time; time.sleep(0.5)"; rm -f "$SWITCHBOARD_DIR/tasks/eps--builder/$TY/001-completed.json"; SWITCHBOARD_SESSION_ID=S6 "$B" task completed "$TY" --note whole >/dev/null ) & echo $! >> "$T/pids"
+out=$("$B" task "$TY" --wait --timeout 10 2>&1) && rc=0 || rc=$?; wait
+[ "$rc" = 0 ] && echo "$out" | has "^$TY  completed " && ok "a record unreadable on one look only: the wait goes on and returns the state" || die "transient bad record: rc $rc: $out"
 out=$("$B" task t00000000 --wait 2>&1) && die "unknown task waited" || true
 [ "$out" = "$("$B" task t00000000 2>&1 || true)" ] && echo "$out" | has "no task t00000000" && ok "an unknown task id fails as task <tid> does" || die "unknown tid: $out"
 bad(){ local want=$1; shift; local o; o=$("$B" "$@" 2>&1) && { die "accepted: $*"; return; } || true; echo "$o" | has -F -- "$want" && return 0; die "$* gave: $o"; }
