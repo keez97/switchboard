@@ -4209,12 +4209,16 @@ def argv_of(pid):
         return []
 
 
-def warn_hookless(d):
-    """For CLI calls: one line on stderr when the calling session d (own_session()) runs without switchboard's hooks.
-    Every hook event but the guard's records the session's process in STATE/claude/, so a session found by its
-    session file with no record there has no hooks: the desktop app's --plugin-dir copy of the plugin over SSH has
-    no hooks folder and replaces the installed plugin. Reads only; a test that asks for no walk gets no warning."""
-    if not d or (board_env("ALLOW_TMP") and board_env("NOWALK")) or board_env("OFF"):
+def warn_hookless(d=None):
+    """For CLI calls: one line on stderr when the calling session d (own_session() when not given) runs without
+    switchboard's hooks. Session start, prompts, PostToolUse and Stop record the session's process in STATE/claude/,
+    so a session found by its session file with no record there has no hooks: the desktop app's --plugin-dir copy of
+    the plugin over SSH has no hooks folder and replaces the installed plugin. Reads only; a test that asks for no walk
+    gets no warning."""
+    if (board_env("ALLOW_TMP") and board_env("NOWALK")) or board_env("OFF"):
+        return
+    d = d or own_session()
+    if not d:
         return
     try:
         if (PROCS / (slug(d["sessionId"]) + ".json")).exists() or (STATE.is_dir() and not os.access(STATE, os.W_OK)):
@@ -6821,7 +6825,7 @@ def main():
     elif a.cmd == "install-prepush":
         install_prepush(a.repo, a.remove)
     elif a.cmd == "who":
-        warn_hookless(own_session())
+        warn_hookless()
         reg = registry()
         rid = find_repo(a.repo, reg) if a.repo else None
         want = lambda r: (not rid or r["repo"] == rid) and (not a.role or r.get("role") == a.role)
@@ -6997,7 +7001,7 @@ def main():
             sys.exit("switchboard: --open takes --for <repo>:<role> alone, and --unseen and --json go with --open")
         task_open(a) if a.open else task_list(a)
     elif a.cmd == "status":
-        warn_hookless(own_session())
+        warn_hookless()
         reg = registry()
         print("board %s  machine %s  repos here %d  watches %d  live events %d  holds %d  live sessions %d  links %d" % (
             BOARD, MACHINE, len(reg), len(all_watches()), len(live_events()), len(active_holds()),
