@@ -7204,8 +7204,11 @@ def main():
         if a.json and (a.what in ("request", "seen", "cancel") or a.what in STATES):
             sys.exit("switchboard: --json goes with %s task <tid>, a read" % CLI_NAME)
         tids, a.tid = list(dict.fromkeys(a.tid)), (a.tid or [None])[0]
-        if len(tids) > 1 and a.what not in STATES:
-            sys.exit("switchboard: task %s takes one task id, and %d were given. Nothing was written." % (a.what, len(tids)))
+        verb = a.what in ("request", "seen", "cancel") or a.what in STATES
+        given = tids if verb else list(dict.fromkeys([a.what] + tids))  # a read: the first id is in a.what
+        if len(given) > 1 and a.what not in STATES:
+            sys.exit("switchboard: task %s takes one task id, and %d were given. Nothing was written." % (
+                a.what if verb else "<tid>", len(given)))
         if a.what == "request":
             task_request(a)
         elif a.what == "seen":
