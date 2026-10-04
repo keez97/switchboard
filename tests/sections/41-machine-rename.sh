@@ -6,7 +6,7 @@
 source "$(dirname "$0")/../lib.sh"
 unset SWITCHBOARD_MACHINE   # the hostname's name, until init writes the config file
 HOST=$(python3 -c "import platform,re; print(re.sub(r'[^a-z0-9]+','-',platform.node().split('.')[0].lower()).strip('-') or 'machine')")
-[ "$HOST" != laptop ] && [ "$HOST" != west ] || die "setup: the hostname is a name this section uses"
+for n in laptop west oak elm ash box5; do [ "$HOST" != $n ] || die "setup: the hostname is a name this section uses"; done
 D="$SWITCHBOARD_DIR"
 pj(){ python3 -c "import json,sys; d=json.load(open(sys.argv[2])); print(eval(sys.argv[1]))" "$@"; }
 recs(){ (cd "$D" && find registry sessions roles links holds subs machines tasks -type f 2>/dev/null | sort | xargs sha1sum); }
@@ -94,6 +94,136 @@ echo "$out" | has -xF "switchboard: repo 'web' is not registered under this mach
   && { "$B" read --repo nosuch 2>&1 || true; } | has -xF "switchboard: unknown repo 'nosuch'" \
   && ok "a repo known only under another machine name is named with that name and its id, not as unregistered" \
   || die "elsewhere: $out $("$B" read --repo tools 2>&1) $("$B" read --repo nosuch 2>&1)"
+
+# ---- F-001: a rename keeps the machine's key, so the owner's key line for the new name vouches that both names are
+# one machine; requests made over agent links under the old name count again. First a machine with no key (laptop,
+# its key from the first init put aside), then oak with a key the owner lists, renamed to elm (the key reused), then
+# elm renamed as 0.6.0 did it, with a new key (ash)
+setmachine(){ python3 - "$HOME/.config/switchboard/config.json" "$1" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d["machine"] = sys.argv[2]; json.dump(d, open(sys.argv[1], "w"))
+PY
+}
+setmachine laptop; mkdir -p "$T/aside" "$D/keys"; mv "$HOME"/.ssh/switchboard_laptop* "$T/aside/"
+AS="$D/keys/allowed_signers"; : > "$AS"; S="$HOME/.ssh"
+export SWITCHBOARD_TEST_PROPOSE=1
+seat P1 "$T/api" "api lead"; seat P2 "$T/web" "web builder"; seat P3 "$T/api" "api lead2"; seat P4 "$T/web" "web builder2"
+seat P5 "$T/api" "api no role"
+for s in "P1 api lead" "P2 web builder" "P3 api lead2" "P4 web builder2"; do set -- $s
+  hook SessionStart "$T/$2" $1 >/dev/null; SWITCHBOARD_SESSION_ID=$1 "$B" role $3 >/dev/null; done
+hook SessionStart "$T/api" P5 >/dev/null
+alink(){ local l; l=$(SWITCHBOARD_SESSION_ID=$1 "$B" link --from "$T/api:$2" --to "$T/web:$4" --scope "fix" 2>/dev/null | awk 'NR==1{print $2}')
+  SWITCHBOARD_SESSION_ID=$3 "$B" link accept "$l" >/dev/null 2>&1; echo "$l"; }
+LA=$(alink P1 lead P2 builder); LB=$(alink P3 lead2 P4 builder2)
+[ "$(pj 'd["state"]' "$D/links/$LA.json")" = active ] && [ "$(pj 'd["state"]' "$D/links/$LB.json")" = active ] \
+  || die "setup: agent links $LA $LB not active"
+rqf(){ # session worker-role subject key [link]: a task request (its key apart from the ones above); its id
+  SWITCHBOARD_SESSION_ID=$1 "$B" task request --to "web:$2" --subject "$3" --key "f001-$4" ${5:+--link "$5"} 2>/dev/null | awk '{print $1}'; }
+tf(){ echo "$D/tasks/$(basename "$(dirname "$(ls -d "$D"/tasks/*/"$1")")")/$1"; }   # a task's folder
+jv(){ "$B" task "$1" --json | python3 -c "import json,sys; print(json.load(sys.stdin)['link']['verdict'])"; }
+js(){ "$B" task "$1" --json | python3 -c "import json,sys; print(json.load(sys.stdin)['signature'])"; }
+note(){ # session tid: that worker session's next note for the task, from its first line on
+  hook PostToolUse "$T/web" "$1" Read '{}' | ctx | grep -A3 -F ": $2 " || true; }
+info(){ has -F "does not cover this request ($1), so it is information"; }
+instr(){ has -F "The link's scope makes this an instruction you act on"; }
+wk(){ # tid session: wakes_for for a change event on the task, with that session's presence record and no role
+  python3 - "$B" "$1" "$D/sessions/$(python3 -c "import json; print(json.load(open('$HOME/.config/switchboard/config.json'))['machine'])")-$2.json" <<'PY'
+import importlib.machinery, importlib.util, json, sys
+l = importlib.machinery.SourceFileLoader("sb", sys.argv[1]); m = importlib.util.module_from_spec(importlib.util.spec_from_loader("sb", l))
+l.exec_module(m); print(m.wakes_for({"kind": "task", "target": "task:" + sys.argv[2]}, dict(json.load(open(sys.argv[3])), role=""), "other"))
+PY
+}
+forge(){ # tid machine seat-machine [key]: the request rewritten in machine's name with that seat machine, signed with key
+  python3 - "$(tf "$1")/000-request.json" "$2" "$3" <<'PY'
+import json, sys; f, m, s = sys.argv[1:4]; r = json.load(open(f)); r["machine"] = m; r["seat"]["machine"] = s
+open(f, "w").write(json.dumps(r, indent=1, sort_keys=True) + "\n")
+PY
+  rm -f "$(tf "$1")/000-request.sig"
+  [ -z "${4:-}" ] || ssh-keygen -Y sign -f "$4" -n switchboard-task < "$(tf "$1")/000-request.json" > "$(tf "$1")/000-request.sig" 2>/dev/null; }
+ssh-keygen -q -t ed25519 -N "" -f "$T/otherk" -C other; ssh-keygen -q -t ed25519 -N "" -f "$T/westk" -C west
+
+# keyless: laptop signs nothing, so its requests over links are lost to a rename; init lists the open ones
+K1=$(rqf P1 builder "fix: k1" k1 "$LA"); K2=$(rqf A1 frontend "client: k2" k2 "$L");
+[ "$(jv "$K1")" = ok ] && [ "$(jv "$K2")" = ok ] && [ "$(js "$K1")" = unsigned ] || die "setup: keyless requests $(jv "$K1") $(jv "$K2")"
+out=$("$B" init --update --machine oak)
+echo "$out" | has -F "  tasks    2 open, requested over a link under laptop, a name keys/allowed_signers has no key of this machine's for, so they now count as information" \
+  && echo "$out" | has -x "           $K1  fix: k1" && echo "$out" | has -x "           $K2  client: k2" \
+  && [ "$(jv "$K2")" = "unsigned request from another machine (unsigned)" ] \
+  && [ "$(jv "$K1")" = "requester is not the session that agreed to the link" ] \
+  && ok "a rename with no key: init lists the open linked tasks under the old name; over the owner link they read (unsigned), over the agent link the seat fails" \
+  || die "keyless: $(jv "$K1") / $(jv "$K2") / $out"
+[ "$(pj 'd["state"]' "$D/links/$LA.json")" = active ] && [ "$(pj 'd["proposed_by"]["machine"]' "$D/links/$LA.json")" = oak ] \
+  || die "setup: $LA after the rename: $(cat "$D/links/$LA.json")"
+echo "oak namespaces=\"switchboard-task\" $(cut -d' ' -f1,2 "$S/switchboard_oak.pub")" > "$AS"   # the owner adds oak's line
+
+# oak, with a key the owner lists, renamed to elm: the key is reused
+R1=$(rqf P1 builder "fix: r1" r1 "$LA"); R2=$(rqf P3 builder2 "fix: r2" r2 "$LB"); R3=$(rqf P1 builder "fix: r3" r3 "$LA")
+R4=$(rqf A1 frontend "client: r4" r4 "$L"); R5=$(rqf P5 builder "plain r5" r5)
+[ "$(js "$R1")" = "signed by oak" ] && [ "$(jv "$R1")" = ok ] && [ "$(wk "$R5" P5)" = True ] || die "setup: oak's requests $(js "$R1") $(jv "$R1")"
+out=$("$B" init --update --machine elm)
+[ "$S/switchboard_elm" -ef "$S/switchboard_oak" ] && cmp -s "$S/switchboard_elm.pub" "$S/switchboard_oak.pub" \
+  && [ -f "$S/switchboard_oak" ] && echo "$out" | has -x "  key      ~/.ssh/switchboard_elm (the key of oak, linked from ~/.ssh/switchboard_oak)" \
+  && echo "$out" | has -F "elm namespaces=\"switchboard-task\" $(cut -d' ' -f1,2 "$S/switchboard_oak.pub")" \
+  && ! echo "$out" | has "^  tasks " && ! echo "$out" | has "lists this machine's key for" \
+  && ok "a rename links the old key and its .pub to the new name, leaves the old one, and the printed key line for the new name carries it" \
+  || die "reuse: $(ls -li "$S"); $out"
+[ "$(pj 'd["state"]' "$D/links/$LA.json")" = active ] && [ "$(pj 'd["accepted_by"]["machine"]' "$D/links/$LB.json")" = elm ] \
+  || die "setup: links after the rename: $(cat "$D/links/$LA.json")"
+n=$(note P2 "$R1")
+[ "$(jv "$R1")" = "requester is not the session that agreed to the link" ] && echo "$n" | info "requester is not the session that agreed to the link" \
+  && [ "$(wk "$R5" P5)" = False ] \
+  && ok "before the owner adds the new name's line: the old requests fail the seat check, the worker's note is information, no wake" \
+  || die "before the line: $(jv "$R1") / $n"
+echo "* namespaces=\"switchboard-task\" $(cut -d' ' -f1,2 "$S/switchboard_oak.pub")" >> "$AS"
+[ "$(jv "$R3")" = "requester is not the session that agreed to the link" ] \
+  && ok "a * line with the same key makes no name an alias" || die "star: $(jv "$R3")"
+echo "oak namespaces=\"switchboard-task\" $(cut -d' ' -f1,2 "$S/switchboard_oak.pub")" > "$AS"
+echo "elm namespaces=\"switchboard-task\" $(cut -d' ' -f1,2 "$S/switchboard_elm.pub")" >> "$AS"   # the owner adds elm's line
+n=$(note P4 "$R2")
+[ "$(jv "$R2")" = ok ] && [ "$(js "$R2")" = "signed by oak" ] && echo "$n" | has -F ": $R2 " && echo "$n" | instr \
+  && [ "$(jv "$R1")" = ok ] && [ "$(wk "$R5" P5)" = True ] \
+  && ok "after the owner adds elm's line with the same key: the old requests are ok and signed by oak, the note is an instruction, the requester is woken" \
+  || die "after the line: $(jv "$R2") $(js "$R2") / $n"
+cp -R "$D" "$T/west-board"
+wv=$(SWITCHBOARD_DIR="$T/west-board" SWITCHBOARD_STATE="$T/west-state" SWITCHBOARD_MACHINE=west "$B" task "$R1" --json \
+  | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['link']['verdict'], d['signature'])")
+[ "$wv" = "ok signed by oak" ] && ok "a second machine with a copy of the board agrees" || die "west: $wv"
+
+# forgeries naming oak, and west copying the seat
+F1=$(rqf P1 builder "fix: f1" f1 "$LA"); forge "$F1" oak oak
+F2=$(rqf P1 builder "fix: f2" f2 "$LA"); forge "$F2" oak oak "$T/otherk"
+echo "west namespaces=\"switchboard-task\" $(cut -d' ' -f1,2 "$T/westk.pub")" >> "$AS"
+F3=$(rqf P1 builder "fix: f3" f3 "$LA"); forge "$F3" west oak "$T/westk"
+F4=$(rqf P1 builder "fix: f4" f4 "$LA"); forge "$F4" west elm "$T/westk"
+[ "$(jv "$F1")" = "unsigned request from another machine (unsigned)" ] \
+  && [ "$(jv "$F2")" = "unsigned request from another machine (BAD SIGNATURE)" ] \
+  && ok "a request forged in oak's name with the agreeing seat: unsigned reads (unsigned), signed with another key (BAD SIGNATURE)" \
+  || die "forged: $(jv "$F1") / $(jv "$F2")"
+[ "$(js "$F3")" = "signed by west" ] && [ "$(jv "$F3")" = "the request's seat names another machine" ] \
+  && [ "$(jv "$F4")" = "the request's seat names another machine" ] \
+  && ok "west, with its own key, copying the seat under the old or the new name is refused" || die "west copies: $(jv "$F3") / $(jv "$F4")"
+N1=$(rqf P1 builder "fix: n1" n1 "$LA")
+[ "$(jv "$N1")" = ok ] && [ "$(js "$N1")" = "signed by elm" ] && ok "a new request after the rename is ok, signed by elm" || die "new: $(jv "$N1") $(js "$N1")"
+grep -v "^oak " "$AS" > "$T/as" && cat "$T/as" > "$AS"   # the owner deletes oak's line
+[ "$(js "$R1")" = "BAD SIGNATURE" ] && [ "$(jv "$R1")" = "requester is not the session that agreed to the link" ] \
+  && [ "$(jv "$R4")" = "unsigned request from another machine (BAD SIGNATURE)" ] && [ "$(jv "$N1")" = ok ] \
+  && ok "with oak's line deleted its requests read BAD SIGNATURE: no alias over the agent link, (BAD SIGNATURE) over the owner link" \
+  || die "oak deleted: $(js "$R1") $(jv "$R1") / $(jv "$R4")"
+
+# elm renamed as 0.6.0 did it: a new key for ash. The owner command that adds ash with elm's key is printed, never run
+E1=$(rqf P3 builder2 "fix: e1" e1 "$LB")
+ssh-keygen -q -t ed25519 -N "" -f "$S/switchboard_ash" -C ash
+out=$("$B" init --update --machine ash)
+echo "ash namespaces=\"switchboard-task\" $(cut -d' ' -f1,2 "$S/switchboard_ash.pub")" >> "$AS"   # the owner adds ash's new key
+st=$("$B" status); EL="ash namespaces=\"switchboard-task\" $(cut -d' ' -f1,2 "$S/switchboard_elm.pub")"
+fix=$(echo "$st" | grep -A1 -F "lists this machine's key for elm, and not for ash" | tail -1 || true)
+[ "$(js "$E1")" = "signed by elm" ] && [ "$(jv "$E1")" = "requester is not the session that agreed to the link" ] \
+  && echo "$out" | has -F "lists this machine's key for elm, and not for ash" && echo "$out" | has -F "$EL" \
+  && echo "$fix" | has -F "$EL" && [ "$(echo "$st" | grep -c "lists this machine's key for")" = 1 ] && ! grep -qF "$EL" "$AS" \
+  && ok "a 0.6.0-style rename: the old requests fail the seat check; init and status print the one command that adds ash with elm's key" \
+  || die "0.6.0 rename: $(jv "$E1") / $out / $st"
+bash -c "$fix" && [ "$(jv "$E1")" = ok ] && ! "$B" status | has "lists this machine's key for" \
+  && ok "once the owner runs it the old requests are ok, and status prints it no more" || die "recovered: $(jv "$E1"); $(cat "$AS")"
+unset SWITCHBOARD_TEST_PROPOSE
 
 # ---- a name keys/allowed_signers gives to a key this machine does not have is another machine's: nothing moves
 mkdir -p "$D/keys"; ssh-keygen -q -t ed25519 -N "" -f "$T/westkey" -C west

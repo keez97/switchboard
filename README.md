@@ -124,6 +124,8 @@ switchboard init --remote git@github.com:you/my-board.git     # on the first mac
 
 `--join` clones the board, makes a signing key and prints the command that adds the new machine to `keys/allowed_signers`. Run it in a terminal on a machine already on the board. Until then, the new machine's requests read BAD SIGNATURE and count as information.
 
+To rename a machine, run `switchboard init --update --machine <new>` on it. Its records move to the new name, and the new name gets the old name's signing key, so the key line init prints for it carries that key. Once you add that line, both names are one machine and the tasks it requested over links under the old name count again. A machine renamed with 0.6.0 has a new key: `switchboard status` prints the command that adds the new name with the old key, for you to run. A machine with no key has nothing to vouch for its old requests, so init lists the open ones to request again.
+
 Events, holds, roles, links and tasks travel through git. Sessions pull when they start, push when a turn ends, and pull in the background at most once a minute, so a change usually shows on another machine within a minute or two. Live messages between machines go through Claude Code's Remote Control, and `switchboard who` lists those sessions. Anyone who can push to the board repo can write records, so keep it private.
 
 A common setup is a laptop plus a server whose workers serve tasks while the laptop is closed. Another gives a machine a role for what only it can do, such as `app:mac-build`.

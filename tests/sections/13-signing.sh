@@ -73,4 +73,21 @@ lines agent-board-task,switchboard-task > "$T/c-east/keys/allowed_signers"; push
   && ok "lines listing both: a request signed with agent-board-task on the other machine still verifies, beside the new ones" \
   || die "two old: $(nsof "$(tf west "$R3")") / $(on west "$B" task "$R3" | tail -1)"
 
+# ---- aliases: names keys/allowed_signers gives one key are one machine, read from the file as it is now. A pattern
+# or negated principal and a cert-authority key name no one machine
+python3 - "$B" <<'PY' && ok "aliases: a shared key joins two names (a principal list too); *, ?, ! and cert-authority lines join none; a changed file is read again" || die "aliases"
+import importlib.machinery, importlib.util, os, sys, time
+l = importlib.machinery.SourceFileLoader("sb", sys.argv[1]); m = importlib.util.module_from_spec(importlib.util.spec_from_loader("sb", l))
+l.exec_module(m); f = m.BOARD / "keys" / "allowed_signers"; k = lambda n: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI" + n
+f.write_text('old namespaces="switchboard-task" %s\n"new,twin" %s # renamed\nca1 cert-authority %s\nca2 cert-authority %s\n'
+             '"!neg,pos" %s\nwild* %s\nq? %s\nsolo %s\n# x %s\n' % (k("A"), k("A"), k("B"), k("B"), k("C"), k("C"), k("A"), k("D"), k("D")))
+want = {"old": {"new", "twin"}, "new": {"old", "twin"}, "ca1": set(), "pos": set(), "solo": set(), "nobody": set()}
+got = {n: m.aliases(n) for n in want}
+assert got == want, got
+assert m.same_machine("old", "new") and not m.same_machine("old", "solo") and not m.same_machine(None, "old")
+assert m.same_seat(("old", "1", "9"), ("twin", "1", "9")) and not m.same_seat(("old", "1", "9"), ("twin", "2", "9"))
+f.write_text("old %s\nnew %s\n" % (k("A"), k("E"))); os.utime(f, (time.time() + 5, time.time() + 5))
+assert m.aliases("old") == set() and not m.same_machine("old", "new"), m.aliases("old")
+PY
+
 finish
