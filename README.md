@@ -105,6 +105,14 @@ switchboard tasks --mine
 
 A hold refuses Write and Edit under the path, and Bash commands that name it or run inside it. A task request with the same `--key` is never made twice, and a body that looks like it holds a secret is refused. The worker records `working`, `input-required`, `completed` (with commit references), `failed` or `rejected`.
 
+`completed` is the only state that takes `--artifact`, once for each file the worker made:
+
+```
+switchboard task completed <tid> --artifact <repo>:<commit>:<path>#<sha256>
+```
+
+The sha256 is the hash of the file's content at that commit. If a repo with that name is on the machine, switchboard checks that the file exists at the commit and that the hash matches. Otherwise it records the artifact as unverified.
+
 ## Multi-machine use
 
 Machines share a board through git: on each one the board folder is a clone of one private repo you own. Any number of machines can join; the tests run two.
