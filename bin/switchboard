@@ -3554,15 +3554,39 @@ def pull_due(every=None):
     every = min(every if every is not None else PULL_EVERY, float(board_env("PULL_EVERY") or PULL_EVERY)
                 if board_env("ALLOW_TMP") else PULL_EVERY)
     stamp = STATE / "pull.stamp"
-    try:  # mtime is wall clock: never now(), which tests move. A stamp ahead of the clock (it was set back) is due
-        if 0 <= time.time() - stamp.stat().st_mtime < every:
-            return
-    except FileNotFoundError:
-        pass
+
+    def fresh():  # mtime is wall clock: never now(), which tests move. A stamp ahead of the clock (it was set back) is due
+        try:
+            return 0 <= time.time() - stamp.stat().st_mtime < every
+        except FileNotFoundError:
+            return False
+
+    if fresh():
+        return
+    # due: claim it under STATE/pull.lock, flocked exclusive without waiting, so of the callers that reach the due
+    # moment together (several waits, the hooks of several sessions) one re-checks and touches the stamp and the rest
+    # return. A filesystem without locks claims unlocked, as before: two callers can then both start a job
     STATE.mkdir(parents=True, exist_ok=True)
-    stamp.touch()
-    if has_remote() and not job_running():  # a live job pulls anyway. Two hooks can both pass the stamp: the second
-        start_sync_job()                     # job finds the lock taken and leaves sync.again, one more pass
+    lock = None
+    try:
+        lock = open(STATE / "pull.lock", "a")
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock.close()
+        return  # another caller holds the claim: it touches the stamp and starts the job
+    except OSError:
+        if lock:
+            lock.close()
+        lock = None
+    try:
+        if lock and fresh():
+            return  # a caller that held the lock just before this one claimed it
+        stamp.touch()
+    finally:
+        if lock:
+            lock.close()
+    if has_remote() and not job_running():  # a live job pulls anyway
+        start_sync_job()
 
 
 def take_sync_lock():

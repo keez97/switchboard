@@ -111,6 +111,24 @@ wait; python3 -c "import time; time.sleep(1)"; idlee
 n=$(cat "$T/fetches" 2>/dev/null | wc -l | tr -d ' ')
 [ "$n" -ge 1 ] && [ "$n" -le 2 ] && ok "three 13 s waits at once with the stamp fresh: the pull 10 s on is one sync job between them (fetches: $n)" \
   || die "three waits: $n fetches, want 1 or 2"
+# five callers reach the due moment together: each loads the CLI, waits for one shared wall-clock instant, then calls
+# pull_due. The claim on the stamp is one step across processes, so one of them starts the job and it makes one fetch
+rm -f "$T/fetches"; touch "$T/state-east/pull.stamp"; python3 -c "import os,sys,time; t=time.time()-11; os.utime(sys.argv[1],(t,t))" "$T/state-east/pull.stamp"
+go=$(python3 -c "import time; print(time.time() + 2)")
+for i in 1 2 3 4 5; do PATH="$T/shim:$PATH" on east python3 - "$B" "$go" <<'PY' & echo $! >> "$T/pids"
+import importlib.machinery, importlib.util, sys, time
+l = importlib.machinery.SourceFileLoader("sb", sys.argv[1]); m = importlib.util.module_from_spec(importlib.util.spec_from_loader("sb", l))
+l.exec_module(m); go = float(sys.argv[2])
+time.sleep(max(0, go - time.time() - 0.05))
+while time.time() < go:
+    pass
+m.pull_due(m.WAIT_PULL)
+PY
+done
+wait; python3 -c "import time; time.sleep(1)"; idlee
+n=$(cat "$T/fetches" 2>/dev/null | wc -l | tr -d ' ')
+[ "$n" = 1 ] && ok "five pull_due callers at the due moment at once: one claims the stamp and one sync job runs (fetches: $n)" \
+  || die "five callers: $n fetches, want 1"
 # a state dir that cannot be written: the wait's pull is skipped and the wait goes on, as a plain read does
 TR=$(on east "$B" task request --to "$T/wrk:builder" --subject "read-only state" --key x3 --no-sign | awk '{print $1}')
 rm -f "$T/state-east/pull.stamp"; chmod 555 "$T/state-east"   # the pull must create its stamp
