@@ -5,7 +5,7 @@
 source "$(dirname "$0")/../lib.sh"
 fx_delta_eps   # S5 holds delta:lead and requests, S6 holds eps:builder and gets the notes
 H="$SWITCHBOARD_DIR/tasks/eps--builder"; AS="$SWITCHBOARD_DIR/keys/allowed_signers"
-LK=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/eps:builder" --scope "evaluate builds for eps" --until 30d | awk 'NR==1{print $2}')
+LK=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/eps:builder" --scope "evaluate builds for eps" --covers "eps" --until 30d | awk 'NR==1{print $2}')
 [ -n "$LK" ] || die "setup: link delta:lead -> eps:builder"
 rq(){ SWITCHBOARD_SESSION_ID=S5 "$B" task request --to "$T/eps:builder" --subject "$1" --key "$2" --link "$LK" "${@:3}" 2>/dev/null | awk '{print $1}'; }
 jv(){ "$B" task "$1" --json | jq -r '.link.verdict + " | " + .signature'; }

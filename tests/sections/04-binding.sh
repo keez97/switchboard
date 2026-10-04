@@ -6,7 +6,7 @@ fx_repos beta gamma   # bystanders: gamma must not hear of a bind, beta only of 
 mkrepo "$T/delta"; mkrepo "$T/eps"; for r in delta eps; do "$B" register "$T/$r" >/dev/null; done
 P5=$(fake S5 "$T/delta" planner); P6=$(fake S6 "$T/eps" worker)
 for s in "S5 delta" "S6 eps"; do set -- $s; hook SessionStart "$T/$2" $1 >/dev/null; done
-out=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/eps:builder" --scope "bind test" --cap 9); L2=$(echo "$out" | awk 'NR==1{print $2}')
+out=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/eps:builder" --scope "bind test" --covers "bind test" --cap 9); L2=$(echo "$out" | awk 'NR==1{print $2}')
 "$B" who --role lead | has "sock.$P5" && "$B" who --role builder | has "sock.$P6" && ok "at creation the creator's end binds to the creator and a sole candidate binds to the other end" || die "creation binding wrong: $out"
 up "$T/eps" S6 "$(peer "$T/sock.$P5" planner "build Z")" | has "bound to link $L2 as builder.*Robin authorised delta:lead" && ok "the first message tells the woken session it is bound and authorised" || die "no bound note on first message"
 [ -z "$(hook PostToolUse "$T/eps" S6 Read '{}' | grep "bound to link")" ] && ok "the bound note is not repeated" || die "bound note repeated"
@@ -15,16 +15,16 @@ hook PostToolUse "$T/delta" S5 Read '{}' | has "bound to link $L2 as lead" && ok
 mkrepo "$T/zeta"; "$B" register "$T/zeta" >/dev/null
 P7=$(fake S7 "$T/zeta" one); P8=$(fake S8 "$T/zeta" two); P9=$(fake S9 "$T/zeta" "zeta work @Builder")
 for s in S7 S8 S9; do hook SessionStart "$T/zeta" $s >/dev/null; done
-out=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/zeta:builder" --scope "tag test")
+out=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/zeta:builder" --scope "tag test" --covers "tag test")
 "$B" who "$T/zeta" --role builder | has "sock.$P9" && ok "an @tagged session wins over several others" || die "tag did not win: $out"
 n=$(ls "$SWITCHBOARD_DIR/links" | wc -l)
-out=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/zeta:tester" --scope "ambiguous" 2>&1) && die "ambiguous link did not fail" || true
+out=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/zeta:tester" --scope "ambiguous" --covers "ambiguous" 2>&1) && die "ambiguous link did not fail" || true
 echo "$out" | has "to=uds:$T/sock.$P7" && echo "$out" | has "to=uds:$T/sock.$P8" && [ "$(ls "$SWITCHBOARD_DIR/links" | wc -l)" -eq "$n" ] && ok "several untagged candidates: nothing is created and the candidates are listed" || die "ambiguity not reported: $out"
-SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/zeta:tester" --scope "ambiguous" --to-session "uds:$T/sock.$P8" >/dev/null
+SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/zeta:tester" --scope "ambiguous" --covers "ambiguous" --to-session "uds:$T/sock.$P8" >/dev/null
 "$B" who "$T/zeta" --role tester | has "sock.$P8" && ok "the rerun with --to-session binds the chosen session" || die "--to-session did not bind"
 
 mkrepo "$T/eta"; "$B" register "$T/eta" >/dev/null
-out=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/eta:fixer" --scope "open end test"); L4=$(echo "$out" | awk 'NR==1{print $2}')
+out=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/eta:fixer" --scope "open end test" --covers "open end test"); L4=$(echo "$out" | awk 'NR==1{print $2}')
 echo "$out" | has "eta:fixer open" && ok "no live session: the link is created with that end open" || die "open end not reported: $out"
 send PreToolUse "$T/delta" S5 "$T/sock.gone" "anyone there" | has "end open, nothing sent" && ok "a send towards an open end is refused" || die "open-end send not refused"
 PA=$(fake SA "$T/eta" plain)   # already running, never published: no SessionStart

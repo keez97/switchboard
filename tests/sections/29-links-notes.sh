@@ -15,14 +15,23 @@ echo "$out" | has "changes made elsewhere" && echo "$out" | has "bound to link $
 
 # ---- item 7: an agent link from delta:lead (SA) to eps:builder (SB)
 export SWITCHBOARD_TEST_PROPOSE=1
-# the subjects below name the scope only through an id in them: the scope_ids path of link_check
+# the subjects below ("item-a k1") are covered only through an id in them that is a covers entry: the scope_ids path
 export SWITCHBOARD_SCOPE_IDS='item-[a-z]+'
 fx_repos delta eps
 PA=$(fake SA "$T/delta" lead1); seat SB "$T/eps" builder1; seat SA2 "$T/delta" lead2; seat SB2 "$T/eps" builder2
 for s in "SA delta" "SB eps" "SA2 delta" "SB2 eps"; do set -- $s; hook SessionStart "$T/$2" $1 >/dev/null; done
 SWITCHBOARD_SESSION_ID=SA "$B" role lead >/dev/null; SWITCHBOARD_SESSION_ID=SB "$B" role builder >/dev/null
-LA=$(SWITCHBOARD_SESSION_ID=SA "$B" link --from "$T/delta:lead" --to "$T/eps:builder" --scope "build item-a" | awk 'NR==1{print $2}')
+# a proposal needs --covers too, and its list is in the record, the acceptor's note and the accepted link
+n=$(ls "$SWITCHBOARD_DIR/links" | grep -c .); out=$(SWITCHBOARD_SESSION_ID=SA "$B" link --from "$T/delta:lead" --to "$T/eps:builder" --scope "build item-a" 2>&1) && rc=0 || rc=$?
+[ "$rc" -eq 1 ] && echo "$out" | has -F "a link needs --covers" && [ "$(ls "$SWITCHBOARD_DIR/links" | grep -c .)" -eq "$n" ] \
+  && ok "a proposal without --covers is refused and nothing is written" || die "proposal without covers: rc $rc: $out"
+LA=$(SWITCHBOARD_SESSION_ID=SA "$B" link --from "$T/delta:lead" --to "$T/eps:builder" --scope "build item-a" --covers "item-a, Item-A" | awk 'NR==1{print $2}')
+pn=$(ptu "$T/eps" SB); "$B" links > "$T/links.txt"
 SWITCHBOARD_SESSION_ID=SB "$B" link accept "$LA" >/dev/null && [ "$(jq -r .state "$SWITCHBOARD_DIR/links/$LA.json")" = active ] || die "setup: agent link $LA not accepted"
+echo "$pn" | has -F "proposes link $LA: delta:lead directs eps:builder within: build item-a. It covers tasks whose subject starts with: item-a. " \
+  && grep -A1 "^$LA " "$T/links.txt" | has -x "    covers: item-a" && [ "$(jq -c .covers "$SWITCHBOARD_DIR/links/$LA.json")" = '["item-a"]' ] \
+  && "$B" links | grep -A2 "^$LA " | has -x "    covers: item-a" && "$B" links --json | jq -e --arg l "$LA" '.links[] | select(.id == $l) | .covers == ["item-a"]' >/dev/null \
+  && ok "the proposal's list is in the acceptor's note and board links, and acceptance keeps it" || die "proposal covers: $(jq -c .covers "$SWITCHBOARD_DIR/links/$LA.json") / $pn"
 cp "$SWITCHBOARD_DIR/links/$LA.json" "$T/la.json"
 again(){ cp "$T/la.json" "$SWITCHBOARD_DIR/links/$LA.json"; }   # the link as it stands before the close reaches this clone
 for s in "SA delta" "SB eps" "SA2 delta" "SB2 eps"; do set -- $s; ptu "$T/$2" $1 >/dev/null; done
@@ -30,7 +39,7 @@ rq(){ SWITCHBOARD_SESSION_ID="$1" "$B" task request --to "$T/eps:builder" --subj
 verdict(){ "$B" task "$1" --json | jq -r .link.verdict; }
 RQ(){ cat "$SWITCHBOARD_DIR/tasks/eps--builder/$1/000-request.json"; }
 TA=$(rq SA k1)
-[ "$(verdict "$TA")" = ok ] && [ "$(env -u SWITCHBOARD_SCOPE_IDS "$B" task "$TA" --json | jq -r .link.verdict)" = "scope does not name the subject" ] && RQ "$TA" | jq -e ".seat == {\"machine\":\"east\",\"pid\":$PA,\"procStart\":\"$("$B" _procstart "$PA")\"}" >/dev/null \
+[ "$(verdict "$TA")" = ok ] && [ "$(env -u SWITCHBOARD_SCOPE_IDS "$B" task "$TA" --json | jq -r .link.verdict)" = "covers list does not name the subject" ] && RQ "$TA" | jq -e ".seat == {\"machine\":\"east\",\"pid\":$PA,\"procStart\":\"$("$B" _procstart "$PA")\"}" >/dev/null \
   && ptu "$T/eps" SB | has "The link's scope makes this an instruction you act on" \
   && ok "the sessions that agreed: the request stores its seat, the verdict is ok through the id in the subject and the worker's note is an instruction" || die "agreed pair: $(verdict "$TA") $(RQ "$TA")"
 

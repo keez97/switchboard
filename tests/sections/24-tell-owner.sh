@@ -32,7 +32,7 @@ reason(){ python3 -c "import json,sys; t=sys.stdin.read().strip(); d=json.loads(
 PUSH="send Robin a push notification with that line if your tools include one (PushNotification); if they do not, the reply is enough"
 
 # ---- a proposal: the CLI line, the act, a final text that names it clears it
-SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "order the next work items" >"$T/out" 2>"$T/err"
+SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "order the next work items" --covers "order the next work items" >"$T/out" 2>"$T/err"
 LP=$(awk 'NR==1{print $2}' "$T/out")
 head -1 "$T/out" | has "^link $LP proposed, not active" && [ "$(wc -l < "$T/err")" = 1 ] \
   && has -F "Tell Robin in your reply, in one line: you proposed link $LP to beta:implementer (scope: \"order the next work items\"), and why. Also $PUSH" < "$T/err" \
@@ -63,7 +63,7 @@ SWITCHBOARD_SESSION_ID=S1 "$B" unlink "$LP" >"$T/out" 2>"$T/err"
 has -x ok < "$T/out" && has -F "you ended link $LP with beta:implementer" < "$T/err" && has -F "Also $PUSH" < "$T/err" && ok "unlink prints the line to tell, with the push" || die "unlink line: $(cat "$T/out" "$T/err")"
 r=$(stopm Stop "$T/alpha" S1 "All set." | reason)
 echo "$r" | has -F -- "- you ended link $LP with beta:implementer" && echo "$r" | has -F "For a link, also send Robin a push" && ok "an unmentioned unlink blocks once" || die "unlink block: $r"
-LD=$(SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "second try" 2>/dev/null | awk 'NR==1{print $2}')
+LD=$(SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "second try" --covers "second try" 2>/dev/null | awk 'NR==1{print $2}')
 stopm Stop "$T/alpha" S1 "proposed $LD" >/dev/null
 SWITCHBOARD_SESSION_ID=S2 "$B" link decline "$LD" --reason "not now" >"$T/out" 2>"$T/err"
 has -F "you declined link $LD from alpha:roadmap" < "$T/err" && ok "link decline prints the line to tell" || die "decline line: $(cat "$T/err")"
@@ -104,7 +104,7 @@ SWITCHBOARD_SESSION_ID=S1 "$B" task request --to "$T/beta:implementer" --subject
 # ---- nothing inside the session's own repo, nothing for reads
 sendto "$T/alpha" S1 "uds:$T/sock.$P3" "same repo" >/dev/null
 SWITCHBOARD_SESSION_ID=S1 "$B" task request --to "$T/alpha:helper" --subject "own repo" --key k4 --no-sign >/dev/null 2>"$T/err"
-SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/alpha:helper" --scope "inside alpha" >/dev/null 2>&1
+SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/alpha:helper" --scope "inside alpha" --covers "inside alpha" >/dev/null 2>&1
 has "you requested task" < "$T/err" && [ -z "$(acts S1)" ] && [ -z "$(stopm Stop "$T/alpha" S1 "done")" ] \
   && ok "a message, task and link inside the session's own repo print the line but record nothing and never block" || die "own repo recorded: $(acts S1)"
 for c in "who" "links" "me" "tasks --mine" "task $TK" "read" "status"; do SWITCHBOARD_SESSION_ID=S1 "$B" $c >/dev/null 2>&1; done
@@ -175,18 +175,18 @@ echo "$r" | has -F "and tell Robin in one line that you did, naming beta:impleme
 # ---- an open end offered to sessions with no role is guidance; a received proposal that no longer waits is dropped
 fx_repos gamma; seat S7 "$T/gamma" g7; seat S8 "$T/gamma" g8
 hook SessionStart "$T/gamma" S7 >/dev/null; hook SessionStart "$T/gamma" S8 >/dev/null
-LG=$(SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/gamma:worker" --scope "open end" 2>/dev/null | awk 'NR==1{print $2}')
+LG=$(SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/gamma:worker" --scope "open end" --covers "open end" 2>/dev/null | awk 'NR==1{print $2}')
 stopm Stop "$T/alpha" S1 "proposed $LG" >/dev/null
 hook PostToolUse "$T/gamma" S7 Read '{}' | ctx | has "proposes link $LG" && hook PostToolUse "$T/gamma" S8 Read '{}' | ctx | has "proposes link $LG" \
   && [ -z "$(acts S7)" ] && [ -z "$(acts S8)" ] && ok "the offer of an open end to sessions with no role records nothing" || die "offer recorded: $(acts S7) / $(acts S8)"
 SWITCHBOARD_SESSION_ID=S7 "$B" link accept "$LG" >/dev/null 2>&1
 [ -z "$(stopm Stop "$T/gamma" S8 "unrelated")" ] && stopm Stop "$T/gamma" S7 "unrelated" | reason | has "you accepted link $LG" \
   && ok "after one of them accepts, the bystander is never blocked; the acceptor is, for its acceptance" || die "bystander blocked"
-LW=$(SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "withdrawn" 2>/dev/null | awk 'NR==1{print $2}')
+LW=$(SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "withdrawn" --covers "withdrawn" 2>/dev/null | awk 'NR==1{print $2}')
 hook PostToolUse "$T/beta" S2 Read '{}' | ctx | has "proposes link $LW" && [ "$(acts S2)" = "received$LW" ] || die "setup: S2 did not receive $LW"
 SWITCHBOARD_SESSION_ID=S1 "$B" unlink "$LW" >/dev/null 2>&1; stopm Stop "$T/alpha" S1 "withdrew $LW" >/dev/null
 [ -z "$(stopm Stop "$T/beta" S2 "unrelated")" ] && ok "a proposal its proposer withdrew before the holder's Stop does not block the holder" || die "withdrawn proposal blocked"
-LT=$(SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "taken" 2>/dev/null | awk 'NR==1{print $2}')
+LT=$(SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "taken" --covers "taken" 2>/dev/null | awk 'NR==1{print $2}')
 hook PostToolUse "$T/beta" S2 Read '{}' | ctx | has "proposes link $LT" || die "setup: S2 did not receive $LT"
 P13=$(fake S13 "$T/beta" beta2); hook SessionStart "$T/beta" S13 >/dev/null; SWITCHBOARD_SESSION_ID=S13 "$B" role implementer --take >/dev/null
 [ -z "$(stopm Stop "$T/beta" S2 "unrelated")" ] && ok "a received proposal whose end another session now holds does not block" || die "taken end blocked"

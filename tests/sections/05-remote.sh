@@ -8,12 +8,12 @@ mkrepo "$T/theta"
 THETA=$("$B" register "$T/theta" | tail -1 | awk '{print $NF}')
 remote R1 "theta ghost" 72000
 n=$(ls "$SWITCHBOARD_DIR/links" | wc -l)
-out=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/theta:runner" --scope "remote test" 2>&1) && die "remote sole candidate was bound" || true
+out=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/theta:runner" --scope "remote test" --covers "remote test" 2>&1) && die "remote sole candidate was bound" || true
 echo "$out" | has "to=bridge:session_R1.*liveness unknown" && [ "$(ls "$SWITCHBOARD_DIR/links" | wc -l)" -eq "$n" ] && ok "a remote session alone in the repo is listed, never picked" || die "remote ghost handling wrong: $out"
 remote R2 "theta @runner" 60
-out=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/theta:runner" --scope "remote test" 2>&1) && die "remote tagged session was bound" || true
+out=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/theta:runner" --scope "remote test" --covers "remote test" 2>&1) && die "remote tagged session was bound" || true
 echo "$out" | has "session_R2" && ok "a remote @tag does not bind on its own" || die "remote tag handling wrong: $out"
-SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/theta:runner" --scope "remote test" --to-session bridge:session_R2 | has 'theta:runner bound to "theta @runner" to=bridge:session_R2' && ok "--to-session binds a remote address on Robin's say" || die "--to-session did not bind the remote"
+SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/theta:runner" --scope "remote test" --covers "remote test" --to-session bridge:session_R2 | has 'theta:runner bound to "theta @runner" to=bridge:session_R2' && ok "--to-session binds a remote address on Robin's say" || die "--to-session did not bind the remote"
 "$B" who "$T/theta" --role runner | has "west .*role=runner .*to=bridge:session_R2 .*last seen 20.*liveness unknown" && ok "board who prints a remote row with its address and says liveness is unknown" || die "who wording: $("$B" who "$T/theta")"
 ! hook PreToolUse "$T/delta" S5 SendMessage '{"to":"bridge:session_R2","message":"go"}' | has "end open" && ok "a send to an end bound on another machine is not refused as open" || die "remote-bound end refused"
 "$B" links | grep "remote test" | has "theta:runner (bound on west, last seen 20.*liveness unknown)" && ok "board links says where a remote end is bound, when it was last seen and that liveness is unknown" || die "links wording: $("$B" links)"
@@ -38,6 +38,6 @@ echo "$out" | has "theta:runner is bound on west and was last seen 20.*more than
 ! hook UserPromptSubmit "$T/delta" S5 | has "days ago" && ok "the 3-day line appears once per session" || die "3-day line repeated"
 remote R2 "theta @runner" 60
 remote R3 "theta old" 400000; "$B" who "$T/theta" | has "1 remote rows not seen for 3 days are hidden" && ! "$B" who "$T/theta" | has session_R3 && ok "old remote rows are hidden as a display cutoff, and the listing says so" || die "display cutoff: $("$B" who "$T/theta")"
-SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/theta:idle" --scope "open by choice" --to-session open | has "theta:idle open" && ok "--to-session open creates the link with that end open" || die "--to-session open failed"
+SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/theta:idle" --scope "open by choice" --covers "open by choice" --to-session open | has "theta:idle open" && ok "--to-session open creates the link with that end open" || die "--to-session open failed"
 
 finish
