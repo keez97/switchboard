@@ -155,20 +155,24 @@ The installed plugin then loads with its hooks. The setting also hides any `--pl
 
 ## Links
 
-A link is a directed pair of addresses with a scope and an end date. Two sessions can make one: one proposes, the other accepts or declines.
+A link is a directed pair of addresses with a scope, a covers list and an end date. Two sessions can make one: one proposes, the other accepts or declines.
 
 ```
-switchboard link --from api:backend --to web:frontend --scope "client generation"    # in the api session
-switchboard link accept l5c2a1e                                                        # in the web session
+switchboard link --from api:backend --to web:frontend --scope "client generation" --covers "client, schema"    # in the api session
+switchboard link accept l5c2a1e                                                                                  # in the web session
 switchboard links
 switchboard unlink l5c2a1e
 ```
 
 A link two sessions make runs at most 24 hours from acceptance and closes when either session leaves its end. From your own terminal, `switchboard link` is active at once for 7 days, and you can set a longer end or a daily message cap.
 
-`switchboard links` shows when each link ends on a second line. `switchboard links --json` prints the same links and proposals as JSON, with the sends so far today and the last activity.
+`switchboard links` shows when each link ends on a second line and its covers list on the next. `switchboard links --json` prints the same links and proposals as JSON, with the sends so far today and the last activity.
 
-A message from the `--from` end arrives with a header telling the receiver it may act within the scope. A task counts as an instruction when the link is live, the requester and worker are its two ends, the scope names the task's subject, and a request from another machine carries a valid signature. Everything else from another session is information, and the note says so.
+Every new link needs `--covers`: the task subjects it covers, as a comma-separated list of prefixes. Each entry is 3 to 80 characters with no `:` or `@`. A task is covered when its subject is an entry, or starts with one followed by `:` or `@`. So word a subject as `<prefix>: what to do`. With `--covers "client, schema"`, the subjects `client: regenerate the SDK` and `schema@4f2a1c9` are covered, and `clients: x` and `Build: client` are not. The scope is for people to read. It decides nothing about tasks.
+
+A link made before 0.7.0 has no covers list. Its tasks are judged by the words of its scope: the subject, or its part before `:` or `@`, must appear there as whole words, so `Build` does not match inside `builder's`. `switchboard task` and the worker's note say when a link is judged this way. To give such a link a list, end it and make a new one with `--covers`.
+
+A message from the `--from` end arrives with a header telling the receiver it may act within the scope. A task counts as an instruction when the link is live, the requester and worker are its two ends, the link covers the task's subject, and a request from another machine carries a valid signature. Everything else from another session is information, and the note says so.
 
 ## Workers
 
@@ -186,7 +190,7 @@ A task waits at its address, so a script can serve it. `switchboard tasks --for 
 | `state_dir` | `~/.local/state/switchboard` | this machine's own state and `errors.log` |
 | `scan` | none | folders whose git repos are registered and watched for references to each other |
 | `shared` | Claude Code's files under `~/.claude` | files whose changes affect every repo |
-| `scope_ids` | none | patterns for ids in a task subject that a link's scope may name |
+| `scope_ids` | none | patterns for ids in a task subject; an id that is a covers entry (or a whole word of the scope, on a link with no covers list) covers the task |
 | `skip` | none | folder names whose repos are never registered |
 
 A bad `owner`, `scan`, `shared`, `scope_ids` or `skip` is ignored and named at the next session start. A file that can't be read, names no `board_dir`, or has a bad `machine`, `board_dir` or `state_dir` stops switchboard until it is fixed: commands exit with an error, hooks do nothing, and pushes go through with a warning.
