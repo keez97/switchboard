@@ -40,6 +40,8 @@ The third line decides what it is. "The link's scope makes this an instruction y
 
 **Tell the owner.** `switchboard: your reply does not tell <owner> what this session did with other sessions this turn:` then one `- ` line per act, on Stop. Nothing you wrote this turn mentioned an act listed under "Tell the owner" below. Tell the owner now, one line each: what you did, to whom, why. It comes once per act.
 
+**No hooks.** `switchboard: this session runs without switchboard's hooks ...` on stderr from `switchboard role`, `who` or `status` means this session gets no notes, hold refusals, link headers or wake. Tell the owner the fix in one line: set `"switchboard@inline": false` in the host's `~/.claude/settings.json`, then `/reload-plugins` (README "Desktop sessions over SSH").
+
 **Refusals.** Stop and report; never find another route to the same effect.
 - `board records are written with the board CLI, not by hand` and `keys are installed by <owner>`: use a switchboard command, or tell the owner.
 - `nothing sent. This message names <target>, which this session was refused ...`: the message asks a peer to do something you were refused. Take it to the owner.
