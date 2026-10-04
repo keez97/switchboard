@@ -49,6 +49,11 @@ T5=$(mk 5); "$B" task "$T5" --wait --timeout 0 >"$T/out" 2>&1 & W=$!; echo $W >>
 kill -TERM $W; wait $W && rc=0 || rc=$?
 [ "$rc" = 1 ] && [ ! -s "$T/out" ] && ok "SIGTERM ends a wait quietly with exit 1" || die "sigterm: rc $rc: $(cat "$T/out")"
 
+TX=$(mk 7); wk working "$TX" >/dev/null; echo 'not json' > "$SWITCHBOARD_DIR/tasks/eps--builder/$TX/002-completed.json"
+read_out=$("$B" task "$TX" 2>/dev/null) && die "a read of a bad record exited 0" || true
+s=$(date +%s); out=$("$B" task "$TX" --wait --timeout 6 2>"$T/err") && rc=0 || rc=$?; e=$(( $(date +%s) - s ))
+[ "$rc" = 1 ] && [ "$e" -lt 3 ] && [ "$out" = "$read_out" ] && has "has a record that cannot be read" < "$T/err" \
+  && ok "a task whose state cannot be read: the wait shows it as a read does and exits 1 at once" || die "unreadable state: rc $rc after ${e}s err [$(cat "$T/err")]"
 out=$("$B" task t00000000 --wait 2>&1) && die "unknown task waited" || true
 [ "$out" = "$("$B" task t00000000 2>&1 || true)" ] && echo "$out" | has "no task t00000000" && ok "an unknown task id fails as task <tid> does" || die "unknown tid: $out"
 bad(){ local want=$1; shift; local o; o=$("$B" "$@" 2>&1) && { die "accepted: $*"; return; } || true; echo "$o" | has -F -- "$want" && return 0; die "$* gave: $o"; }
