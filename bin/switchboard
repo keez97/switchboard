@@ -3052,8 +3052,7 @@ def signing_key(machine):
     """(key file, its public key 'type base64', made now): ~/.ssh/switchboard_<machine>, or agent-board_<machine>
     (the name before the rename) while that is the one there, as sign_request takes them; made (ed25519, no
     passphrase, mode 600) when neither is. (None, why, False) when ssh-keygen cannot make or read it."""
-    key = next((k for k in (HOME / ".ssh" / ("%s_%s" % (n, machine)) for n in ("switchboard", "agent-board"))
-                if k.exists()), None)
+    key = key_file(machine)
     made = key is None
     if made:
         key = HOME / ".ssh" / ("switchboard_%s" % machine)
@@ -3066,6 +3065,86 @@ def signing_key(machine):
     if rc or len(pub) < 2:
         return None, "ssh-keygen -y %s: %s" % (tilde(key), last_line(out)), made
     return key, " ".join(pub), made
+
+
+def key_file(machine):
+    """This machine's key file for a machine name, as sign_request takes it: ~/.ssh/switchboard_<machine>, or
+    agent-board_<machine> while that is the one there; None when neither is."""
+    return next((k for k in (HOME / ".ssh" / ("%s_%s" % (n, machine)) for n in ("switchboard", "agent-board"))
+                 if k.exists()), None)
+
+
+def reuse_key(old, new):
+    """init renaming this machine from old to new: ~/.ssh/switchboard_<new> becomes a hard link to old's key file, and
+    its .pub to old's .pub (a copy, the key mode 600, where a link cannot be made). The key line printed for new then
+    carries old's key, and the owner's line for it is the proof the two names are one machine (aliases). Nothing is
+    moved: a rename back still finds old's key, and move_machine reads it. '' when new has a key already or old has
+    none, else what was done."""
+    src = key_file(old)
+    if not src or key_file(new):
+        return ""
+    dst, how = HOME / ".ssh" / ("switchboard_%s" % new), "linked"
+    for a, b, mode in ((src, dst, 0o600), (src.with_name(src.name + ".pub"), dst.with_name(dst.name + ".pub"), 0o644)):
+        if not a.exists() or b.exists():
+            continue
+        try:
+            os.link(a, b)
+        except OSError:
+            how = "copied"
+            with os.fdopen(os.open(b, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode), "wb") as w:
+                w.write(a.read_bytes())
+    return "%s from %s" % (how, tilde(src))
+
+
+def key_pub(key):
+    """The public key 'type base64' of a private key file, read from the private key itself (a .pub can be copied
+    from anywhere), with no passphrase; '' when ssh-keygen cannot read it so."""
+    rc, out = run_cmd(["ssh-keygen", "-y", "-P", "", "-f", str(key)], timeout=10)
+    pub = out.split()[:2]
+    return " ".join(pub) if not rc and len(pub) == 2 else ""
+
+
+def rename_fixes(b, machine):
+    """For this machine renamed to machine while it kept a key of an earlier name (a rename on 0.6.0 made a new key):
+    [(earlier name, the owner command that adds machine with that name's key to board b's keys/allowed_signers)], one
+    per key, so the requests it signed under that name count over its links again (aliases). Offered only for a key
+    file in ~/.ssh this machine can read whose key keys/allowed_signers lists under that name, lists under no name of
+    machine's, and is not machine's own key (whose line init prints anyway). A key file is no proof: the owner
+    decides, and nothing here writes the file."""
+    f = b / "keys" / "allowed_signers"
+    by = signer_keys(f)
+    names = sorted({k.name.split("_", 1)[1] for n in ("switchboard", "agent-board")
+                    for k in (HOME / ".ssh").glob(n + "_*") if not k.name.endswith(".pub")} & set(by) - {machine})
+    out, seen, own = [], set(by.get(machine) or ()), None
+    for old in names:
+        pub = key_pub(key_file(old))
+        if not pub or pub.split()[1] not in by[old] or pub.split()[1] in seen:
+            continue
+        if own is None:
+            own = key_pub(key_file(machine)) if key_file(machine) else ""
+        seen.add(pub.split()[1])
+        if pub != own:
+            out.append((old, key_command('%s namespaces="%s" %s' % (machine, SIG_NS, pub), machine, b, has_remote(b))))
+    return out
+
+
+def rename_fix_text(fixes, machine):
+    """rename_fixes as status and init print them: what each command is for, then the command."""
+    return "".join("keys/allowed_signers lists this machine's key for %s, and not for %s. If %s was this machine's "
+                   "name before, the requests it signed then count over its links again once you add %s with that key, "
+                   "from a terminal, not a Claude session:\n  %s\n" % (old, machine, old, machine, c)
+                   for old, c in fixes)
+
+
+def linked_open(b, machine):
+    """[(tid, subject)] of board b's open tasks requested over a link in machine's name, oldest first."""
+    rows = []
+    for d in (d for d in (b / "tasks").glob("*/t*") if d.is_dir()):
+        recs = task_records(d)
+        req = recs[0][1] if recs and recs[0][0] == "000-request.json" and recs[0][1] else {}
+        if req.get("machine") == machine and req.get("link") and task_state(recs) not in TERMINAL:
+            rows.append((req.get("ts", 0), d.name, str(req.get("subject", "?"))))
+    return [r[1:] for r in sorted(rows)]
 
 
 def signer_line(b, machine):
@@ -3184,6 +3263,8 @@ def init(a):
     existed = os.path.exists(CONFIG_FILE)
     write_config(fields)
     s.mkdir(parents=True, exist_ok=True)
+    # a rename keeps the key: before signing_key, which would make a new one for the new name
+    reused = reuse_key(MACHINE, m) if m != MACHINE else ""
     key, pub, kmade = signing_key(m)
     line = '%s namespaces="%s" %s' % (m, SIG_NS, pub) if key else ""
     have, todo, signers = signer_line(b, m), "", ""
@@ -3218,6 +3299,10 @@ def init(a):
     # this machine's records under its old name: in the first commit below when there is one, otherwise sync commits
     # the move as it commits every record write
     moved = move_machine(b, MACHINE, m) if m != MACHINE else {}
+    # requests over links this machine made under the old name with no key the board lists: no key line can vouch
+    # for them, so the ones still open count as information from now on
+    stale = linked_open(b, MACHINE) if moved is not None and m != MACHINE and not (
+        key_file(MACHINE) and signer_line(b, MACHINE)) else []
     # a first commit, which --remote can push; it holds keys/, which sync never commits
     err = board_commit(b, "switchboard: init %s" % m) if not git(b, "rev-parse", "-q", "--verify", "HEAD") else ""
     remote = has_remote(b)
@@ -3231,7 +3316,8 @@ def init(a):
     if ident:
         print("           git identity for its commits: %s" % ident)
     print("  state    %s" % tilde(s))
-    print("  key      %s" % ("%s (%s)" % (tilde(key), "made now" if kmade else "there already") if key else "none"))
+    print("  key      %s" % ("%s (%s)" % (tilde(key), "made now" if kmade else "the key of %s, %s" % (MACHINE, reused)
+                                    if reused else "there already") if key else "none"))
     print("  signers  %s" % signers)
     if moved:
         print("  records  moved from the machine name %s to %s: %s" % (MACHINE, m, ", ".join(
@@ -3241,8 +3327,16 @@ def init(a):
               "they are another machine's" % MACHINE)
     if err:
         print("  commit   failed: %s" % err)
+    if stale:
+        print("  tasks    %d open, requested over a link under %s, a name keys/allowed_signers has no key of this "
+              "machine's for, so they now count as information. Request again the ones still needed, with a new --key:\n%s" % (
+                  len(stale), MACHINE, "\n".join("           %s  %s" % r for r in stale[:10]) +
+                  ("\n           and %d more" % (len(stale) - 10) if len(stale) > 10 else "")))
     if todo:
         print(todo)
+    fixes = rename_fixes(b, m) if key else []
+    if fixes:
+        print(rename_fix_text(fixes, m), end="")
     if not any(os.path.realpath(x) == os.path.realpath(BIN_LINK.parent) for x in os.environ.get("PATH", "").split(":") if x):
         print("%s is not on your PATH, so a terminal does not find `switchboard`, the link a session start makes there. "
               "Add it in your shell's profile (~/.bashrc, ~/.zshrc): export PATH=\"$HOME/.local/bin:$PATH\"" % tilde(BIN_LINK.parent))
@@ -5043,8 +5137,11 @@ def link_check(req, reader=None, d=None, timeout=20):
     scope_covers_subject is link_covers either way.
     A link two sessions made gives authority to the two seats that agreed to it, never to the next holder of an end:
     the request's seat must be the one at `from` (a request written before seats were stored is judged by role), and
-    reader, the presence record of a session reading the task as its worker, the one at `to`. A seat that is not a
-    record, or a reader task_reader could not determine (READER_UNKNOWN), fails an agent link closed.
+    name the machine the request names, so a machine that signs as itself cannot borrow a seat from the link record;
+    reader, the presence record of a session reading the task as its worker, the one at `to`. Seats compare by
+    same_seat: a machine renamed since, under a name keys/allowed_signers gives the same key, is the same machine.
+    A seat that is not a record, or a reader task_reader could not determine (READER_UNKNOWN), fails an agent link
+    closed.
     A request from another machine (its machine is not MACHINE, or is missing) that would be ok is checked last: its
     signature in d, the task folder, must read "signed by", else the verdict is "unsigned request from another
     machine (<status>)". So must one that names this machine when this machine signs its own (signs_own): anyone who
@@ -5070,12 +5167,14 @@ def link_check(req, reader=None, d=None, timeout=20):
                       "link revoked" if l.get("revoked") else
                       "link expired" if l.get("until") and l["until"] <= now() else
                       "from is not the requester" if not out["from_is_requester"] else
+                      "the request's seat names another machine"
+                      if by and isinstance(rs, dict) and rs.get("machine") != req.get("machine") else
                       "requester is not the session that agreed to the link"
-                      if by and not old and (not isinstance(rs, dict) or seat(rs) != by) else
+                      if by and not old and (not isinstance(rs, dict) or not same_seat(seat(rs), by)) else
                       "to is not the worker" if not out["to_is_worker"] else
                       "cannot tell whether this session agreed to the link" if at and reader is READER_UNKNOWN else
                       "this session is not the one that agreed to the link"
-                      if at and isinstance(reader, dict) and seat(reader) != at else
+                      if at and isinstance(reader, dict) and not same_seat(seat(reader), at) else
                       ("scope does not name the subject" if out["covers"] == COVERS_NONE else
                        "covers list does not name the subject") if not out["scope_covers_subject"] else "ok")
     other = req.get("machine") != MACHINE
@@ -5205,10 +5304,9 @@ def sig_cached(d, req, timeout=20):
     return st
 
 
-def key_lines():
-    """board status: one line per key in keys/allowed_signers: its validity window or how long ago it was installed
-    (from the git log of the file), with a warning past 90 days. Reads only."""
-    f = BOARD / "keys" / "allowed_signers"
+def signer_entries(f):
+    """The lines of an allowed_signers file f that hold something, in order: (principals, {option: value}, key type,
+    base64 key), or None for a line that cannot be read as one. No file is no lines."""
     out = []
     for line in (f.read_text().splitlines() if f.exists() else []):
         try:
@@ -5219,10 +5317,71 @@ def key_lines():
         kt = next((i for i, w in enumerate(words) if i in (1, 2) and re.match(r"(ssh-|ecdsa-|sk-)", w)), None)
         if kt is None or len(words) < kt + 2:
             if words:
-                out.append("key ?: unreadable line in keys/allowed_signers")
+                out.append(None)
             continue
-        who, blob = words[0], words[kt + 1]
-        opts = dict(o.partition("=")[::2] for o in (words[1].split(",") if kt == 2 else []))
+        out.append((words[0], dict(o.partition("=")[::2] for o in (words[1].split(",") if kt == 2 else [])),
+                    words[kt], words[kt + 1]))
+    return out
+
+
+_KEYS = {}
+
+
+def signer_keys(f=None):
+    """{machine name: the set of base64 keys} in an allowed_signers file (BOARD's when f is None), from signer_entries.
+    A principal with *, ? or ! (a pattern or a negation) names no one machine, and a cert-authority line holds a key
+    many machines' keys may be signed with, so neither counts. Read again only when the file's mtime or size changes."""
+    f = f or BOARD / "keys" / "allowed_signers"
+    try:
+        s = f.stat()
+        k = (s.st_mtime_ns, s.st_size)
+    except OSError:
+        return {}
+    if (_KEYS.get(str(f)) or (None,))[0] != k:
+        by = collections.defaultdict(set)
+        try:
+            entries = signer_entries(f)
+        except (OSError, UnicodeDecodeError):
+            entries = []
+        for e in entries:
+            if e and "cert-authority" not in e[1]:
+                for n in e[0].split(","):
+                    if n and not re.search(r"[*?!]", n):
+                        by[n].add(e[3])
+        _KEYS[str(f)] = (k, dict(by))
+    return _KEYS[str(f)][1]
+
+
+def aliases(name, f=None):
+    """The other machine names keys/allowed_signers gives at least one of the keys it gives name: the owner listed
+    one key under both, as after a rename (init reuses the old name's key for the new one), so they are one machine."""
+    by = signer_keys(f)
+    mine = by.get(name) or set()
+    return {n for n, ks in by.items() if n != name and ks & mine}
+
+
+def same_machine(a, b):
+    """True when machine names a and b are one machine: equal, or aliases. Only for comparing seats (a request's or a
+    reader's with the one that agreed to a link, and wakes_for's): whose name a request is in, whose key verifies it,
+    and presence stay exact."""
+    return a == b or isinstance(a, str) and isinstance(b, str) and b in aliases(a)
+
+
+def same_seat(s, t):
+    """Two seats (machine, pid, procStart) of one process: pid and process start equal, the machines same_machine."""
+    return tuple(s[1:]) == tuple(t[1:]) and same_machine(s[0], t[0])
+
+
+def key_lines():
+    """board status: one line per key in keys/allowed_signers: its validity window or how long ago it was installed
+    (from the git log of the file), with a warning past 90 days. Reads only."""
+    f = BOARD / "keys" / "allowed_signers"
+    out = []
+    for e in signer_entries(f):
+        if not e:
+            out.append("key ?: unreadable line in keys/allowed_signers")
+            continue
+        who, opts, _, blob = e
         ct = git(BOARD, "log", "--format=%ct", "-S", blob, "--", "keys/allowed_signers").split()
         installed = int(ct[-1]) if ct else int(f.stat().st_mtime)
         since = "installed %s ago%s" % (age(installed), "" if ct else " (not committed)")
@@ -6642,7 +6801,8 @@ _WAKING = [False]  # set while the waiter marks notes shown and writes them: a S
 
 def wakes_for(e, rec, sid):
     """True when change event e concerns this session: a task it requested (by its address, or by its seat when it
-    held no role), works on or watches, or a link with an end it holds. Other kinds never wake it."""
+    held no role, under this machine's name or one same_machine takes for it), works on or watches, or a link with an
+    end it holds. Other kinds never wake it."""
     held = lambda end: bool(rec.get("role")) and isinstance(end, dict) and \
         (end.get("repo"), end.get("role")) == (rec.get("repo"), rec.get("role"))
     kind, target = e.get("kind"), str(e.get("target") or "")
@@ -6651,7 +6811,8 @@ def wakes_for(e, rec, sid):
         req = (record(d / "000-request.json", *TASK_FIELDS["request"]) if d else None) or {}
         s = req.get("seat") if isinstance(req.get("seat"), dict) else {}
         return held(req.get("requester")) or held(req.get("worker")) or any(map(held, req.get("watchers") or [])) \
-            or req.get("session") == sid or bool(s) and (s.get("machine"), str(s.get("pid")), s.get("procStart")) == seat(rec)
+            or req.get("session") == sid \
+            or bool(s) and same_seat((s.get("machine"), str(s.get("pid")), s.get("procStart")), seat(rec))
     if kind == "link" and re.fullmatch(r"link:l[0-9a-f]+", target):
         l = load(BOARD / "links" / (target[5:] + ".json"), None)
         return isinstance(l, dict) and (held(l.get("from")) or held(l.get("to")))
@@ -7420,6 +7581,7 @@ def main():
             print("machines: " + ml)
         for k in key_lines():
             print(k)
+        print(rename_fix_text(rename_fixes(BOARD, MACHINE), MACHINE), end="")
 
 
 if __name__ == "__main__":
