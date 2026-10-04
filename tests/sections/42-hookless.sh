@@ -122,9 +122,12 @@ mkdir -p "$T/ro"; chmod 555 "$T/ro"
 F=$(claude F sF)
 for e in SessionStart PostToolUse; do
   printf '{"hook_event_name": "%s", "cwd": "%s", "session_id": "sF", "tool_name": "Read", "tool_input": {}, "tool_use_id": "u1"}' "$e" "$T/alpha" \
-    | SWITCHBOARD_STATE="$T/ro/state" python3 "$FC" run "$T/fc-F.sock" "$T/alpha" "\"$B\" hook" >/dev/null 2>&1 || true
+    | TMPDIR="$T/fb" SWITCHBOARD_STATE="$T/ro/state" python3 "$FC" run "$T/fc-F.sock" "$T/alpha" "\"$B\" hook" >/dev/null 2>&1 || true
 done
 [ ! -e "$T/ro/state" ] || die "setup: the state dir was created under a read-only parent"
+n=$(cat "$T"/fb/switchboard-*/errors.log 2>/dev/null | grep -c " remember_process ") || true
+[ "$n" = 2 ] && ! grep -qs " mark_process " "$T"/fb/switchboard-*/errors.log \
+  && ok "a state dir that cannot be created: each hook logs the process record it could not write once" || die "fallback log: $(cat "$T"/fb/switchboard-*/errors.log 2>&1)"
 out=$(SWITCHBOARD_STATE="$T/ro/state" python3 "$FC" run "$T/fc-F.sock" "$T/alpha" "\"$B\" who" 2>&1 >/dev/null </dev/null)
 ! echo "$out" | grep -q "without switchboard" && ok "a state dir that cannot be created: no hookless warning" || die "warned with no state dir: $out"
 SWITCHBOARD_STATE="$T/ro/state" python3 "$FC" run "$T/fc-F.sock" "$T/alpha" "\"$B\" status" 2>/dev/null </dev/null | has "$T/ro/state" \
