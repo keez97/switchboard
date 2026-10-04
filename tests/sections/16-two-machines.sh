@@ -46,15 +46,29 @@ git -C "$T/clone-west" checkout -q -- "tasks/eps--builder/$RT/000-request.json"
 # a bulk close of 20 tasks while each push takes 2 s: one sync after the loop, so no record is left out of the commit
 # (a job per task gave up while the first one pushed, leaving the later records uncommitted until a later sync)
 idle(){ local n=0; while held "$T/state-$1/sync-job.lock" && [ $n -lt 120 ]; do python3 -c "import time; time.sleep(0.5)"; n=$((n+1)); done; }
-ids=""; for i in $(seq 20); do ids="$ids $(cd "$T" && on east "$B" task request --to "$T/eps:builder" --subject "bulk $i" --key bk$i --no-sign 2>/dev/null | awk '{print $1}')"; done
-idle east; syncw east; idle east
-printf '#!/bin/sh\nsleep 2\nexec git receive-pack "$@"\n' > "$T/slow-rp"; chmod +x "$T/slow-rp"; git -C "$T/clone-east" config remote.origin.receivepack "$T/slow-rp"
-# shellcheck disable=SC2086  # one word per task id
-rm -f "$T/state-east/sync.ok"; out=$(cd "$T/eps" && on east "$B" task completed $ids --note bulk 2>&1)
-waitfor "$T/state-east/sync.ok"; idle east; git -C "$T/clone-east" config --unset remote.origin.receivepack
-left=$(git -C "$T/clone-east" status --porcelain); n=$(git -C "$T/two.git" ls-tree -r --name-only main | grep -c '/001-completed.json$' || true)
-[ "$(echo "$out" | grep -c ' 001 completed$')" = 20 ] && [ -z "$left" ] && [ "$n" = 20 ] \
-  && ok "a bulk close of 20 tasks with a slow push: once the sync ends no record is left uncommitted and all 20 are pushed" \
-  || die "bulk sync: $(echo "$out" | grep -c ' 001 completed$') closed, left [$left], pushed $n"
+bulk(){ # tag count [running] -> closes that many new tasks in one call, its output in $out, each push east makes taking
+  # 2 s and counted in $T/pushes; with running, while a sync job of east's own is in its push
+  local ids="" i; for i in $(seq "$2"); do ids="$ids $(cd "$T" && on east "$B" task request --to "$T/eps:builder" --subject "$1 $i" --key "$1$i" --no-sign 2>/dev/null | awk '{print $1}')"; done
+  idle east; syncw east; idle east
+  printf '#!/bin/sh\necho 1 >> "%s"\nsleep 2\nexec git receive-pack "$@"\n' "$T/pushes" > "$T/slow-rp"; chmod +x "$T/slow-rp"
+  git -C "$T/clone-east" config remote.origin.receivepack "$T/slow-rp"; rm -f "$T/pushes"
+  if [ -n "${3:-}" ]; then
+    on east "$B" sync; waitfor "$T/pushes"; held "$T/state-east/sync-job.lock" || die "setup: east's sync job is not in its push"
+  fi
+  # shellcheck disable=SC2086  # one word per task id
+  out=$(cd "$T/eps" && on east "$B" task completed $ids --note "$1" 2>&1)
+  python3 -c "import time; time.sleep(1)"; idle east; python3 -c "import time; time.sleep(1)"; idle east
+  git -C "$T/clone-east" config --unset remote.origin.receivepack
+  left=$(git -C "$T/clone-east" status --porcelain); n=$(git -C "$T/two.git" ls-tree -r --name-only main | grep -c "/001-completed.json$" || true); }
+bulk bulk 20
+[ "$(echo "$out" | grep -c ' 001 completed$')" = 20 ] && [ -z "$left" ] && [ "$n" = 20 ] && [ "$(wc -l < "$T/pushes")" = 1 ] \
+  && ok "a bulk close of 20 tasks with a slow push: one sync after it, and once it ends no record is left uncommitted and all 20 are pushed" \
+  || die "bulk sync: $(echo "$out" | grep -c ' 001 completed$') closed, left [$left], pushed $n, $(wc -l < "$T/pushes") pushes"
+# the bulk ends while a job already holds the lock, past its commit: the bulk's own job finds the lock taken, and the
+# running one takes one more pass for it (it used to end, leaving the records uncommitted until some later sync)
+bulk held 8 running
+[ "$(echo "$out" | grep -c ' 001 completed$')" = 8 ] && [ -z "$left" ] && [ "$n" = 28 ] && [ ! -e "$T/state-east/sync.again" ] \
+  && ok "a bulk close while a sync job is in its push: that job takes one more pass, no record is left uncommitted and all are pushed" \
+  || die "bulk sync, job running: $(echo "$out" | grep -c ' 001 completed$') closed, left [$left], pushed $n of 28"
 
 finish

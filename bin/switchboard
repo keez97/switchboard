@@ -3700,18 +3700,51 @@ def commit_rebase(onto, err):
     return rc, out, stuck, err
 
 
+SYNC_AGAIN = 3  # extra passes a sync job runs for writes made while it held the lock
+
+
 def sync_job():
-    """The background half of sync: stamp, then with three tries fetch, stage, commit, rebase and push. Staging,
-    commit and rebase rewrite the clone's files, so they run in one window under the tree lock held exclusive, which
-    every board write takes shared (tree_write): no record lands mid-rebase to be lost to it. The fetch and the push
-    run outside it. Outcome in STATE/sync.ok (last success) and STATE/sync.fail (last failure, cleared by a clean
-    run)."""
+    """The background half of sync, one job at a time per machine. A job that finds the lock taken leaves
+    STATE/sync.again and exits; it touches the marker before it tries the lock, so the job that holds it sees the
+    marker at its next look. The holder clears the marker as each pass starts, and runs another pass while the marker
+    comes back and the last pass pushed, SYNC_AGAIN at most; after it lets go of the lock it looks once more and takes
+    the lock again for a marker left meanwhile. A marker a dead job left only costs the next job one more pass."""
     if not has_remote():
         return
-    job = take_sync_lock()
-    if not job:
-        return
-    err = ""
+    again = STATE / "sync.again"
+    passes, pushed = 0, True
+    while True:
+        try:
+            STATE.mkdir(parents=True, exist_ok=True)
+            again.touch()
+        except OSError:
+            pass  # take_sync_lock fails the same way, and no job runs here
+        job = take_sync_lock()
+        if not job:
+            return
+        try:
+            while True:
+                passes += 1
+                try:
+                    again.unlink()
+                except OSError:
+                    pass
+                pushed = sync_pass()
+                if not pushed or passes > SYNC_AGAIN or not again.exists():
+                    break
+        finally:
+            job.close()
+        if not pushed or passes > SYNC_AGAIN or not again.exists():
+            return  # a pass that did not push leaves the marker to the next sync
+
+
+def sync_pass():
+    """One pass of a sync job, under its lock: stamp, then with three tries fetch, stage, commit, rebase and push.
+    Staging, commit and rebase rewrite the clone's files, so they run in one window under the tree lock held
+    exclusive, which every board write takes shared (tree_write): no record lands mid-rebase to be lost to it. The
+    fetch and the push run outside it. Outcome in STATE/sync.ok (last success) and STATE/sync.fail (last failure,
+    cleared by a clean run). True when it pushed."""
+    err, pushed = "", False
     try:
         stamp_machine()  # a board write: before the window, where a second open of the tree lock here would wait on it
         # a fetch can die when another runs; a push can lose a race: name the refs, retry, keep the outcome
@@ -3719,9 +3752,9 @@ def sync_job():
         if len(u) != 2:  # an upstream that is a local branch
             (STATE / "sync.fail").write_text("%d %s\n" % (now(), ("the board clone's upstream %r is not a remote and a "
                                              "branch: set one with git branch -u origin/main" % "/".join(u))[:200]))
-            return
+            return False
         remote, branch = u
-        pushed, last, stuck = False, "", []
+        last, stuck = "", []
         for i in (1, 2, 3):
             stuck = []
             rc, out = sh(["git", "fetch", "-q"] + fetch_spec(remote, branch))
@@ -3733,7 +3766,7 @@ def sync_job():
                         rc, out = 1, "board writes held the tree lock for %d s" % TREE_HOLD
                 if rc is None:
                     (STATE / "sync.fail").write_text("%d %s\n" % (now(), out[:200]))
-                    return
+                    return False
             if rc == 0:
                 rc, out = sh(["git", "push", "-q", remote, "HEAD:" + branch])
             if rc == 0:
@@ -3757,8 +3790,7 @@ def sync_job():
             (STATE / "sync.fail").write_text("%d %s\n" % (now(), ("sync-job: %r" % e)[:200]))
         except Exception:
             pass
-    finally:
-        job.close()
+    return pushed
 
 
 def archive():
