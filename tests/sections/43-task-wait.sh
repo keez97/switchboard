@@ -86,16 +86,31 @@ s=$(date +%s); out=$(SWITCHBOARD_PULL_EVERY=0 on east "$B" task "$TW" --wait --t
 [ "$rc" = 0 ] && echo "$out" | has "^$TW  completed  from east" && echo "$out" | has "done on west" \
   && ok "a transition recorded on another machine is picked up through pull_due while waiting (${e}s)" || die "two machines: rc $rc after ${e}s: $out"
 wait
-# the machine's pull stamp just refreshed (a hook here pulled) and PULL_EVERY at its default of 60 s: the wait pulls on
-# its own cadence, so west's change, pushed after the wait's first pull, shows within about 10 s
+# the machine's pull stamp just refreshed (a hook here pulled) and PULL_EVERY at its default of 60 s: the wait pulls once
+# the stamp is 10 s old, so west's change, pushed after the stamp was refreshed, shows within about 12 s
 TV=$(on east "$B" task request --to "$T/wrk:builder" --subject "from east again" --key x2 --no-sign | awk '{print $1}'); syncm east; syncm west
 ( python3 -c "import time; time.sleep(3)"; cd "$T/wrk" && on west "$B" task completed "$TV" --note "done on west again" >/dev/null ) & echo $! >> "$T/pids"
 touch "$T/state-east/pull.stamp"
 s=$(date +%s); out=$(on east "$B" task "$TV" --wait --timeout 30 2>&1) && rc=0 || rc=$?; e=$(( $(date +%s) - s ))
 [ "$rc" = 0 ] && [ "$e" -lt 25 ] && echo "$out" | has "done on west again" \
-  && ok "with the pull stamp fresh and PULL_EVERY at its default, the wait pulls on its own cadence and sees another machine's change (${e}s)" \
+  && ok "with the pull stamp fresh and PULL_EVERY at its default, the wait pulls once the stamp is 10 s old and sees another machine's change (${e}s)" \
   || die "own cadence: rc $rc after ${e}s: $out"
 wait
+# waits share the machine's pull stamp with hooks and with each other: a fetch the sync job makes is counted through a
+# git shim first in PATH, which the wait passes on to the job it starts
+idlee(){ local n=0; while held "$T/state-east/sync-job.lock" && [ $n -lt 80 ]; do python3 -c "import time; time.sleep(0.25)"; n=$((n+1)); done; }
+mkdir -p "$T/shim"; printf '#!/bin/sh\ncase " $* " in *" fetch "*) echo fetch >> "%s";; esac\nexec "%s" "$@"\n' "$T/fetches" "$(command -v git)" > "$T/shim/git"; chmod +x "$T/shim/git"
+TQ=$(on east "$B" task request --to "$T/wrk:builder" --subject "left alone" --key x4 --no-sign | awk '{print $1}'); syncm east; idlee
+rm -f "$T/fetches"; touch "$T/state-east/pull.stamp"
+PATH="$T/shim:$PATH" on east "$B" task "$TQ" --wait --timeout 5 >/dev/null 2>&1 || true
+python3 -c "import time; time.sleep(1)"; idlee
+[ ! -e "$T/fetches" ] && ok "with the pull stamp under 10 s old, a 5 s wait starts no sync job" || die "fresh stamp: $(wc -l < "$T/fetches") fetches in a 5 s wait"
+rm -f "$T/fetches"; touch "$T/state-east/pull.stamp"
+for i in 1 2 3; do PATH="$T/shim:$PATH" on east "$B" task "$TQ" --wait --timeout 13 >/dev/null 2>&1 & echo $! >> "$T/pids"; done
+wait; python3 -c "import time; time.sleep(1)"; idlee
+n=$(cat "$T/fetches" 2>/dev/null | wc -l | tr -d ' ')
+[ "$n" -ge 1 ] && [ "$n" -le 2 ] && ok "three 13 s waits at once with the stamp fresh: the pull 10 s on is one sync job between them (fetches: $n)" \
+  || die "three waits: $n fetches, want 1 or 2"
 # a state dir that cannot be written: the wait's pull is skipped and the wait goes on, as a plain read does
 TR=$(on east "$B" task request --to "$T/wrk:builder" --subject "read-only state" --key x3 --no-sign | awk '{print $1}')
 rm -f "$T/state-east/pull.stamp"; chmod 555 "$T/state-east"   # the pull must create its stamp
