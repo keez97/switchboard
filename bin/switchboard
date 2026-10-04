@@ -4118,8 +4118,9 @@ def above(pid):
 def remember_process(session, recheck=False):
     """Hook side: record which process runs this session. The session file, when there is one, names the process
     exactly and wins over a walk; a record made by a walk looks for the file again on recheck (session start and each
-    prompt). A record whose process is not the one this hook runs under (the same session id reopened in a new
-    process: the desktop app, claude --resume) is rewritten on any event. Returns the record or None; never raises."""
+    prompt). A record whose process is gone (the same session id reopened in a new process: the desktop app, claude
+    --resume) is rewritten on any event. A record naming another live process of the same session id (both run at
+    once) is left as it is, so the two never take turns rewriting it. Returns the record or None; never raises."""
     sid = session.get("session_id")
     if not sid:
         return None
@@ -4129,15 +4130,18 @@ def remember_process(session, recheck=False):
         rec = rec if isinstance(rec, dict) and rec.get("pid") else None
         # a test that asks for no walk runs its hooks straight from the test shell: no process above them to match
         walk = not (board_env("ALLOW_TMP") and board_env("NOWALK"))
-        if rec and walk and not (above(int(rec["pid"])) and
-                                 (not rec.get("procStart") or rec["procStart"] == proc_start(rec["pid"]))):
-            rec = None  # an earlier process of this session id: this one is recorded below
+        # the process it names is gone, or its pid now runs another process: an earlier process of this session id,
+        # and this one is recorded below. Whether that process is this hook's or another live one, the record stands
+        if rec and walk and rec.get("procStart") and rec["procStart"] != proc_start(rec["pid"]):
+            rec = None
         if rec and (rec.get("via") == "file" or not recheck):
-            return rec  # the hot path: one small read and, on Linux, one or two of /proc
+            return rec  # the hot path: one small read and, on Linux, one of /proc
         d = session_file(sid=sid)
         if d and walk and not above(d["pid"]):  # two processes run this session id: the file of the one above this hook
             hp = hook_process()
             d = session_file(sid=sid, pid=hp) if hp else None
+        if rec and d and walk and d["pid"] != rec["pid"] and not above(int(rec["pid"])):
+            return rec  # another live process of this session id holds the record: left as it is
         pid = d["pid"] if d else (rec or {}).get("pid") or hook_process()
         if rec and rec.get("pid") == pid and (not d or rec.get("via") == "file"):
             return rec
