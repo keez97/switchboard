@@ -4212,17 +4212,22 @@ def argv_of(pid):
 def warn_hookless(d=None):
     """For CLI calls: one line on stderr when the calling session d (own_session() when not given) runs without
     switchboard's hooks. Session start, prompts, PostToolUse and Stop record the session's process in STATE/claude/,
-    so a session found by its session file with no record there has no hooks: the desktop app's --plugin-dir copy of
-    the plugin over SSH has no hooks folder and replaces the installed plugin. Reads only; a test that asks for no walk
-    gets no warning."""
+    so a session found by its session file with no record there for its process has no hooks: the desktop app's
+    --plugin-dir copy of the plugin over SSH has no hooks folder and replaces the installed plugin. Reads only; a test
+    that asks for no walk gets no warning."""
     if (board_env("ALLOW_TMP") and board_env("NOWALK")) or board_env("OFF"):
         return
     d = d or own_session()
     if not d:
         return
     try:
-        if (PROCS / (slug(d["sessionId"]) + ".json")).exists() or (STATE.is_dir() and not os.access(STATE, os.W_OK)):
-            return  # the hooks ran, or ran and could not write: status names that case
+        rec = load(PROCS / (slug(d["sessionId"]) + ".json"), None)
+        # a record from an earlier process of the same session id (the desktop app reopens a session in a new
+        # process) says nothing about this one
+        if isinstance(rec, dict) and str(rec.get("pid")) == str(d["pid"]) \
+                and (not rec.get("procStart") or rec["procStart"] == proc_start(d["pid"])) \
+                or (STATE.is_dir() and not os.access(STATE, os.W_OK)):
+            return  # the hooks ran in this process, or ran and could not write: status names that case
         line = ('switchboard: this session runs without switchboard\'s hooks (no notes, holds, link headers or wake). '
                 'Desktop over SSH: set "switchboard@inline": false in the host\'s ~/.claude/settings.json, then '
                 '/reload-plugins. See README "Desktop sessions over SSH".')

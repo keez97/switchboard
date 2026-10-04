@@ -52,6 +52,9 @@ mv "$REC" "$T/rec.json"
   && ok "NOWALK: no warning" || die "warned with NOWALK"
 ! SWITCHBOARD_OFF=1 python3 "$FC" run "$T/fc-A.sock" "$T/alpha" "\"$B\" status" 2>&1 >/dev/null </dev/null | has "without switchboard" \
   && ok "switchboard switched off: no warning" || die "warned with OFF"
+# the app reopens a session in a new process with the same session id: a record naming the earlier process is stale
+python3 -c "import json,sys; r=json.load(open(sys.argv[1])); r['pid']=int(sys.argv[2]); json.dump(r,open(sys.argv[3],'w'))" "$T/rec.json" $$ "$REC"
+under A "\"$B\" who" 2>&1 >/dev/null | has "$WARN" && ok "a record for the same session id naming another process: the warning shows" || die "stale record hid the warning"
 mv "$T/rec.json" "$REC"
 
 # the desktop app's copy: --plugin-dir names a switchboard plugin with no hooks/hooks.json
