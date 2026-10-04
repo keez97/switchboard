@@ -64,6 +64,36 @@ OLD=$(SWITCHBOARD_NOW=$(( $(date +%s) - 8*3600 )) SWITCHBOARD_SESSION_ID=S5 "$B"
 out=$("$B" tasks --stale); echo "$out" | has "^$OLD  submitted .* 8h  old one" && ! echo "$out" | has "^$T2 \|^$M1 " && [ -z "$("$B" tasks --stale 10 | grep "^$OLD")" ] && SWITCHBOARD_SESSION_ID=S5 "$B" tasks --mine --stale | has "^$OLD " && ok "--stale lists a request older than the window and not a fresh one, and combines with --mine" || die "--stale: $out"
 CK=$(env -u SWITCHBOARD_ALLOW_TMP SWITCHBOARD_NOW=$(( $(date +%s) - 8*3600 )) SWITCHBOARD_SESSION_ID=S5 "$B" task request --to "$T/eps:builder" --subject "clock" --key n1 | awk '{print $1}')
 python3 -c "import json,sys,time; sys.exit(0 if abs(json.load(open(sys.argv[1]))['ts']-time.time())<60 else 1)" "$SWITCHBOARD_DIR/tasks/eps--builder/$CK/000-request.json" && ! "$B" tasks --stale | has "^$CK " && ok "SWITCHBOARD_NOW alone, without the test-board variable, changes nothing" || die "clock override honoured outside a test board"
+rp(){ SWITCHBOARD_SESSION_ID=S5 "$B" task request --to "$T/eps:builder" --kind report --subject "$1" --key "$2" | awk '{print $1}'; }
+RD="$SWITCHBOARD_DIR/tasks/eps--builder"; rnote(){ python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['note'])" "$1"; }
+R1=$(rp "status one" r1); R2=$(rp "status two" r2)
+SWITCHBOARD_SESSION_ID=S5 "$B" task "$R1" >/dev/null; SWITCHBOARD_SESSION_ID=S5 "$B" task seen "$R1" >/dev/null 2>&1 || true
+[ "$(ls "$RD/$R1")" = "000-request.json" ] && "$B" task "$R1" | has "^$R1  submitted " && ok "a report stays open when its requester reads it" || die "requester read closed a report: $(ls "$RD/$R1")"
+wk "$R1" >/dev/null; "$B" task "$R1" | has "^$R1  completed " && [ "$(rnote "$RD/$R1/001-completed.json")" = "report read" ] && python3 -c "import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r['session']=='S6' and r['seq']==1 else 1)" "$RD/$R1/001-completed.json" && ok "a report completes with the note 'report read' when its worker reads it" || die "report read: $(ls "$RD/$R1")"
+out=$(wk seen "$R2"); echo "$out" | has -x "$R2 seen by east" && echo "$out" | has -x "$R2 001 completed" && [ "$(rnote "$RD/$R2/001-completed.json")" = "report read" ] && ok "task seen by the worker completes a report and prints the transition line" || die "report seen: $out"
+hook PostToolUse "$T/delta" S11 Read '{}' | has "task $R1 completed: status one (report read)" && ok "the completion reaches the requester's repo as a transition event" || die "report completion event not delivered"
+f3=$(ls "$RD/$R2" | tr '\n' ' '); wk "$R2" >/dev/null; wk seen "$R2" | has -x "$R2 already seen by east; nothing written" && [ "$(ls "$RD/$R2" | tr '\n' ' ')" = "$f3" ] && ok "a report that is already terminal is left alone" || die "terminal report rewritten"
+RH=$(rp "status hooked" r6); out=$(hook PostToolUse "$T/eps" S6 Read '{}'); echo "$out" | has "a task for you.*$RH" && [ "$(ls "$RD/$RH")" = "000-request.json" ] && ok "the hook's task note is a notice and does not close a report" || die "hook note closed or missed a report: $out"
+wk rejected "$RH" >/dev/null
+RO=$(SWITCHBOARD_NOW=$(( $(date +%s) - 8*3600 )) SWITCHBOARD_SESSION_ID=S5 "$B" task request --to "$T/eps:builder" --kind report --subject "old report" --key r4 | awk '{print $1}')
+RN=$(SWITCHBOARD_NOW=$(( $(date +%s) - 8*3600 )) SWITCHBOARD_SESSION_ID=S5 "$B" task request --to "$T/eps:builder" --kind eval --subject "old eval" --key r5 | awk '{print $1}')
+"$B" tasks --stale | has "^$RO " && wk "$RO" >/dev/null && wk seen "$RN" | has -x "$RN seen by east" && out=$("$B" tasks --stale) && ! echo "$out" | has "^$RO " && echo "$out" | has "^$RN  submitted" && ok "tasks --stale lists a report until its worker reads it, and a seen task of another kind stays open and stale" || die "stale with reports: $("$B" tasks --stale)"
+wk rejected "$RN" >/dev/null
+RB1=$(rp "bulk one" b1); RB2=$(rp "bulk two" b2); RB3=$(SWITCHBOARD_SESSION_ID=S5 "$B" task request --to "$T/zeta:builder" --subject "bulk elsewhere" --key b3 | awk '{print $1}')
+BD="$SWITCHBOARD_DIR/tasks"; set +e; out=$(wk completed "$RB1" "$RB3" "$RB2" --note "swept" 2>"$T/bulk.err"); rc=$?; set -e
+echo "$out" | has -x "$RB1 001 completed" && echo "$out" | has -x "$RB2 001 completed" && [ "$(echo "$out" | wc -l | tr -d ' ')" = 2 ] && has "$RB3" < "$T/bulk.err" && has "Acting as zeta:builder" < "$T/bulk.err" && [ "$rc" = 1 ] && [ "$(ls "$BD/zeta--builder/$RB3")" = "000-request.json" ] && [ "$(rnote "$BD/eps--builder/$RB2/001-completed.json")" = swept ] && ok "a bulk close takes the tasks it may and refuses the rest on stderr with exit 1" || die "bulk: rc=$rc out=[$out] err=[$(cat "$T/bulk.err")]"
+RB4=$(rp "bulk four" b4); RB5=$(rp "bulk five" b5); set +e; wk completed "$RB4" "$RB5" > /dev/null 2>&1; rc=$?; set -e
+[ "$rc" = 0 ] && "$B" task "$RB4" | has "^$RB4  completed " && "$B" task "$RB5" | has "^$RB5  completed " && ok "a bulk close with nothing refused exits 0" || die "bulk all ok: rc=$rc"
+RB6=$(rp "bulk six" b6); RB7=$(rp "bulk seven" b7); n6=$(find "$RD" -type f | wc -l)
+out=$(wk completed "$RB6" "$RB7" --artifact "$GOOD" 2>&1) && die "bulk with an artifact accepted" || true
+echo "$out" | has "goes with one task" && [ "$(find "$RD" -type f | wc -l)" = "$n6" ] && ok "--artifact with more than one task is refused with nothing written" || die "bulk artifact: $out"
+out=$(wk seen "$RB6" "$RB7" 2>&1) && die "seen took two tasks" || true
+echo "$out" | has "takes one task id" && out=$(wk cancel "$RB6" "$RB7" 2>&1) && die "cancel took two tasks" || true
+echo "$out" | has "takes one task id" && [ "$(find "$RD" -type f | wc -l)" = "$n6" ] && ok "seen, cancel and show keep one task id: a second is refused" || die "two ids: $out"
+RS=$(SWITCHBOARD_SESSION_ID=S5 "$B" task request --to "$T/eps:builder" --subject "single" --key b8 | awk '{print $1}')
+out=$(wk working "$RS" --note one) && [ "$out" = "$RS 001 working" ] && out=$(wk working "$RB1" 2>&1) && die "single refusal exited 0" || true
+[ "$out" = "switchboard: task $RB1 is completed, which is final. Nothing was written." ] && ok "one task id prints and refuses exactly as before" || die "single tid output: $out"
+wk rejected "$RB6" "$RB7" "$RS" >/dev/null
 [ -z "$(stop SubagentStop "$T/eps" S6 0)" ] && ok "SubagentStop never gives the task reminder" || die "SubagentStop reminded"
 out=$(stop Stop "$T/eps" S6 0); echo "$out" | has '"decision": "block"' && echo "$out" | has -F "task $T2 is input-required since 0m. If its state changed, record it: \`switchboard task working|input-required|completed|failed|rejected $T2\`. If nothing changed, record nothing; never record a state that did not happen." && ! echo "$out" | has "$OLD\|$TID" && ok "a Stop reminds of a task left in input-required, and not of a submitted or completed one" || die "Stop reminder: $out"
 [ -z "$(stop Stop "$T/eps" S6 1)" ] && ok "the continuation the reminder forces is not reminded again" || die "reminder repeated in the continuation"

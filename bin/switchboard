@@ -4664,17 +4664,55 @@ def task_transition(a):
     if a.artifact and state != "completed":
         sys.exit("switchboard: --artifact goes with completed only. Nothing was written.")
     reg = registry()
-    arts = [artifact(r, reg) for r in a.artifact]
+    seq, wrote = write_state(d, recs, req, sess, state, note, [artifact(r, reg) for r in a.artifact],
+                             a.waiting_on or OWNER.lower())  # lowercase, as the records before the config file have it
+    wrote or sys.exit("switchboard: another transition of task %s took number %03d first. Nothing was written; rerun." % (req["id"], seq))
+    print("%s %03d %s" % (req["id"], seq, state))
+
+
+def task_transitions(a, tids):
+    """board task <state> <tid>...: each task goes through task_transition alone. A refusal is printed with its task
+    and the rest go on; exit 1 when any was refused. One task behaves as task_transition does."""
+    if len(tids) > 1 and a.artifact:
+        sys.exit("switchboard: --artifact goes with one task, and %d were given. Nothing was written." % len(tids))
+    refused = 0
+    for tid in tids or [None]:  # none given: task_transition refuses it as it always did
+        a.tid = tid
+        try:
+            task_transition(a)
+        except SystemExit as e:
+            if len(tids) < 2:
+                raise
+            refused += 1
+            print("switchboard: task %s: %s" % (tid, re.sub(r"^switchboard: ", "", str(e.code))), file=sys.stderr)
+    if refused:
+        sys.exit(1)
+
+
+def write_state(d, recs, req, sess, state, note, arts=(), waiting_on=""):
+    """The worker's next numbered record for a task, its event and a sync: (the number, whether this call wrote it).
+    The caller has checked who may write."""
     seq = max(int(n[:3]) for n, _, _ in recs if re.match(r"\d{3}-", n)) + 1
-    rec = {"id": req["id"], "seq": seq, "state": state, "note": note, "artifacts": arts,
+    rec = {"id": req["id"], "seq": seq, "state": state, "note": note, "artifacts": list(arts),
            "session": sess["sessionId"] if sess else "", "machine": MACHINE, "ts": now()}
     if state == "input-required":
-        rec["waiting_on"] = a.waiting_on or OWNER.lower()  # lowercase, as the records before the config file have it
+        rec["waiting_on"] = waiting_on
     if not write_once(d / ("%03d-%s.json" % (seq, state)), rec):
-        sys.exit("switchboard: another transition of task %s took number %03d first. Nothing was written; rerun." % (req["id"], seq))
+        return seq, False
     task_event(req, state, note, "task%s%d" % (req["id"], seq), sess)
     sync(pull=False)
-    print("%s %03d %s" % (req["id"], seq, state))
+    return seq, True
+
+
+def close_report(d, req, sess):
+    """A report (--kind report) is read when its worker reads it: the worker's CLI completes it, so only the worker
+    writes state. The number of the completed record, or 0 for a task that is no report, is final already, or whose
+    next number another transition took."""
+    recs = task_records(d)
+    if req.get("kind") != "report" or task_state(recs) in TERMINAL or any(not r for _, r, _ in recs):
+        return 0
+    seq, wrote = write_state(d, recs, req, sess, "completed", "report read")
+    return seq if wrote else 0
 
 
 def task_cancel(a):
@@ -5101,18 +5139,21 @@ def delivery(tid, curs):
 
 def mark_read(d):
     """board task <tid> run from a Claude session that holds the task's worker address is the worker reading the task:
-    seen on this machine. Anyone else reading it (the requester, a script, another session in the repo) marks nothing.
-    Never fails the read."""
+    seen on this machine, and a report is completed. Anyone else reading it (the requester, a script, another session
+    in the repo) marks nothing. Never fails the read."""
     try:
-        w = load(d / "000-request.json", {}).get("worker") or {}
+        req = load(d / "000-request.json", {})
+        w = req.get("worker") or {}
         s = own_session() if w.get("repo") and w.get("role") else None
         rid = repo_of(s.get("cwd") or os.getcwd())[0] if s else None
         if not rid or rid != w["repo"]:
             return
         rec = {"session_id": s["sessionId"], "machine": MACHINE, "repo": rid, "pid": s["pid"],
                "procStart": " ".join(str(s["procStart"]).split())}
-        if role_of(rec) == w["role"] and mark_seen(w, d.name)[0]:
-            sync(pull=False)
+        if role_of(rec) == w["role"]:
+            if mark_seen(w, d.name)[0]:
+                sync(pull=False)
+            close_report(d, req, s)
     except Exception:
         pass
 
@@ -5139,12 +5180,15 @@ def task_seen(a):
     recs = task_records(d)
     req = recs[0][1] if recs and recs[0][0] == "000-request.json" else None
     req or sys.exit("switchboard: task %s has no readable request. Nothing was written." % a.tid)
-    worker_check(req["worker"], a.tid)
+    sess = worker_check(req["worker"], a.tid)
     if mark_seen(req["worker"], a.tid)[0]:
         sync(pull=False)
         print("%s seen by %s" % (a.tid, MACHINE))
     else:
         print("%s already seen by %s; nothing written" % (a.tid, MACHINE))
+    seq = close_report(d, req, sess)
+    if seq:
+        print("%s %03d completed" % (a.tid, seq))
 
 
 def last_ts(recs):
@@ -6663,7 +6707,7 @@ def main():
     sub.add_parser("links")
     p = sub.add_parser("me"); p.add_argument("--holds", metavar="REPO:ROLE")
     p = sub.add_parser("task"); p.add_argument("what", help="request, seen, cancel, a state, or a task id to show")
-    p.add_argument("tid", nargs="?"); p.add_argument("--note"); p.add_argument("--waiting-on")
+    p.add_argument("tid", nargs="*", help="one task id; a state takes several"); p.add_argument("--note"); p.add_argument("--waiting-on")
     p.add_argument("--artifact", action="append", default=[]); p.add_argument("--for", dest="for_")
     p.add_argument("--to"); p.add_argument("--subject"); p.add_argument("--key"); p.add_argument("--kind", default="")
     g = p.add_mutually_exclusive_group(); g.add_argument("--body"); g.add_argument("--body-file")
@@ -6940,6 +6984,9 @@ def main():
     elif a.cmd == "task":
         if a.json and (a.what in ("request", "seen", "cancel") or a.what in STATES):
             sys.exit("switchboard: --json goes with %s task <tid>, a read" % CLI_NAME)
+        tids, a.tid = list(dict.fromkeys(a.tid)), (a.tid or [None])[0]
+        if len(tids) > 1 and a.what not in STATES:
+            sys.exit("switchboard: task %s takes one task id, and %d were given. Nothing was written." % (a.what, len(tids)))
         if a.what == "request":
             task_request(a)
         elif a.what == "seen":
@@ -6947,7 +6994,7 @@ def main():
         elif a.what == "cancel":
             task_cancel(a)
         elif a.what in STATES:
-            task_transition(a)
+            task_transitions(a, tids)
         else:
             task_show(a.what, a.json)
     elif a.cmd == "tasks":
