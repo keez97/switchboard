@@ -23,4 +23,22 @@ PY2
 "$B" tasks --for "$T/eps:builder" --open --json > "$T/open.json"; "$B" tasks --for "$T/eps:builder" --open > "$T/open.txt"
 python3 -c "import json,sys; a=json.load(open(sys.argv[1])); ids=open(sys.argv[2]).read().split(); sys.exit(0 if [x['id'] for x in a]==ids and len(ids)>2 and all(x['state']=='submitted' for x in a) and [x['ts'] for x in a]==sorted(x['ts'] for x in a) else 1)" "$T/open.json" "$T/open.txt" && [ "$("$B" tasks --for "$T/zeta:tester" --open --json)" = "[]" ] && [ "$("$B" tasks --for "$T/eps:builder" --open --unseen --json | python3 -c "import json,sys; print(' '.join(x['id'] for x in json.load(sys.stdin)))")" = "$("$B" tasks --for "$T/eps:builder" --open --unseen | tr '\n' ' ' | sed 's/ $//')" ] && ok "tasks --open --json is the --open list as a JSON array, oldest first; [] on nothing; --unseen still narrows" || die "--open --json: $(cat "$T/open.json" | head -5)"
 
+# links --json: the links and proposals the text lists, with the computed fields; an expired link not yet closed is in neither
+LX=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/eps:builder" --scope "expired json" | awk 'NR==1{print $2}')
+jq ".until = $(( $(date +%s) - 1 ))" "$SWITCHBOARD_DIR/links/$LX.json" > "$T/lx" && mv "$T/lx" "$SWITCHBOARD_DIR/links/$LX.json"
+LP=$(SWITCHBOARD_TEST_PROPOSE=1 SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/eps:builder" --scope "proposed json" | awk 'NR==1{print $2}')
+[ "$(jq -r .state "$SWITCHBOARD_DIR/links/$LP.json")" = proposed ] || die "setup: $LP is not a proposal"
+"$B" links --json > "$T/links.json"; "$B" links > "$T/links.txt"
+python3 - "$T/links.json" "$T/links.txt" "$L2" "$LX" "$LP" <<'PY3' && ok "board links --json: each link has active, until_iso, sent_today, cap, last_activity; proposals have expires_iso; the ids match the text and an expired link is in neither" || die "links --json: $(cat "$T/links.json")"
+import json,re,sys; j=json.load(open(sys.argv[1])); txt=open(sys.argv[2]).read(); l2,lx,lp=sys.argv[3:6]
+by={l["id"]:l for l in j["links"]}; a=by[l2]; p=j["proposals"]
+ids=[w for w in re.findall(r"^(l[0-9a-f]+)  ", txt, re.M)]
+ok = (sorted(j)==["links","proposals"] and a["active"] is True and a["cap"]==9 and a["sent_today"]==0 and a["scope"]=="bind test"
+      and re.fullmatch(r"\d{4}-\d\d-\d\d \d\d:\d\d", a["until_iso"]) and ("ends "+a["until_iso"]) in txt
+      and isinstance(a["last_activity"],int) and re.fullmatch(r"\d{4}-\d\d-\d\d \d\d:\d\d", a["last_activity_iso"])
+      and lx not in by and lx not in txt and [x["id"] for x in p]==[lp] and lp in ids and re.fullmatch(r"\d{4}-.*", p[0]["expires_iso"])
+      and sorted(by)==sorted(i for i in ids if i!=lp))
+sys.exit(0 if ok else 1)
+PY3
+
 finish

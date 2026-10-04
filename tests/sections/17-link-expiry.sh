@@ -26,6 +26,8 @@ jq -r .closed_reason "$SWITCHBOARD_DIR/links/$L4.json" | has "^expired" && ok "a
 [ "$(jq -r '.revoked // 0' "$SWITCHBOARD_DIR/links/$L6.json")" = 0 ] && ok "a link with a message yesterday stays open" || die "L6 closed"
 [ "$(jq -r '.revoked // 0' "$SWITCHBOARD_DIR/links/$L7.json")" = 0 ] && [ "$(jq -r .closed_reason "$SWITCHBOARD_DIR/links/$L8.json")" = "idle for 3 days" ] && ok "a link whose only use is tasks stays open while a transition between its ends is recent, and closes when the task is 4 days old" || die "task activity: L7 $(jq -c '{revoked,closed_reason}' "$SWITCHBOARD_DIR/links/$L7.json") L8 $(jq -c '{revoked,closed_reason}' "$SWITCHBOARD_DIR/links/$L8.json")"
 "$B" links | grep "^$L7 " | has "last activity 1d ago$" && "$B" links | grep "^$L6 " | has "last activity 1d ago$" && ok "board links shows each link's last activity" || die "links activity: $("$B" links | grep -e "^$L7 " -e "^$L6 ")"
+ends=$(python3 -c "import json,sys,time; print(time.strftime('%Y-%m-%d %H:%M', time.localtime(json.load(open(sys.argv[1]))['until'])))" "$SWITCHBOARD_DIR/links/$L6.json")
+"$B" links | grep -A1 "^$L6 " | has -x "    ends $ends" && ok "board links shows an owner link's end date on a second line" || die "links ends line: $("$B" links | grep -A1 "^$L6 ")"
 grep -l "link $L4 closed: expired" "$SWITCHBOARD_DIR"/events/*.json >/dev/null && grep -l "link $L5 closed: idle" "$SWITCHBOARD_DIR"/events/*.json >/dev/null && ok "both closings are announced to every repo" || die "closing events missing"
 SWITCHBOARD_MACHINE=west hook PostToolUse "$T/delta" S5 Read '{}' >/dev/null 2>&1 || true
 [ "$(jq -r '.revoked // 0' "$SWITCHBOARD_DIR/links/$L6.json")" = 0 ] && ok "another machine never closes a link it did not create" || die "L6 closed by west"

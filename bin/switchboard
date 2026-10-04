@@ -6660,7 +6660,7 @@ def main():
     p = sub.add_parser("bind"); p.add_argument("id"); p.add_argument("label"); p.add_argument("--session", required=True)
     p = sub.add_parser("unlink"); p.add_argument("id"); p.add_argument("--reason", default="")
     p = sub.add_parser("link-cap"); p.add_argument("id"); p.add_argument("cap", type=int)
-    sub.add_parser("links")
+    p = sub.add_parser("links"); p.add_argument("--json", action="store_true")
     p = sub.add_parser("me"); p.add_argument("--holds", metavar="REPO:ROLE")
     p = sub.add_parser("task"); p.add_argument("what", help="request, seen, cancel, a state, or a task id to show")
     p.add_argument("tid", nargs="?"); p.add_argument("--note"); p.add_argument("--waiting-on")
@@ -6920,6 +6920,12 @@ def main():
     elif a.cmd == "me":
         board_me(a.holds)
     elif a.cmd == "links":
+        if a.json:  # the same links and proposals the text lists; a closed or expired link is in neither
+            ls = [dict(l, active=is_active(l), until_iso=iso(l["until"]) if l.get("until") else None, sent_today=sent_today(l["id"]),
+                       cap=l.get("cap") or 0, last_activity=link_last_activity(l), last_activity_iso=iso(link_last_activity(l)))
+                  for l in links()]
+            return print(json.dumps({"links": ls, "proposals": [dict(l, expires_iso=iso(l["expires"])) for l in proposals()]},
+                                    indent=1, sort_keys=True))
         for l in links():
             o = [end_note(e["repo"], e["role"]) for e in (l["from"], l["to"])]
             print("%s  %s:%s%s -> %s:%s%s  scope: %s  today %d/%s  last activity %s ago" % (
@@ -6929,6 +6935,8 @@ def main():
             if l.get("accepted_by"):
                 print("    agent-made: proposed by %s, accepted by %s on %s; ends %s" % (
                     who_str(l.get("proposed_by") or {}), who_str(l["accepted_by"]), iso(l["accepted"]), iso(l["until"])))
+            elif l.get("until"):
+                print("    ends %s" % iso(l["until"]))
         props = proposals()
         if props:
             print("proposed, not active (no authority until the other end accepts):")

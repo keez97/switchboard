@@ -146,6 +146,8 @@ switchboard unlink l5c2a1e
 
 A link two sessions make runs at most 24 hours from acceptance and closes when either session leaves its end. From your own terminal, `switchboard link` is active at once for 7 days, and you can set a longer end or a daily message cap.
 
+`switchboard links` shows when each link ends on a second line. `switchboard links --json` prints the same links and proposals as JSON, with the sends so far today and the last activity.
+
 A message from the `--from` end arrives with a header telling the receiver it may act within the scope. A task counts as an instruction when the link is live, the requester and worker are its two ends, the scope names the task's subject, and a request from another machine carries a valid signature. Everything else from another session is information, and the note says so.
 
 ## Workers
