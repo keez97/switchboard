@@ -92,6 +92,27 @@ for i in 1 2 3; do
 done
 ! echo "$won" | grep -q BAD && ok "a rejection racing the worker's read of its report: one record wins, a stated rejection stands ($won )" || die "rejection and read raced:$won"
 [ ! -s "$SWITCHBOARD_STATE/errors.log" ] || die "race: errors logged: $(cat "$SWITCHBOARD_STATE/errors.log")"
+# a home on NFS or SMB: flock on a task lock fails with ENOLCK. The transitions go ahead unlocked, logged once a run
+cat > "$T/nolck.py" <<PY
+import errno, fcntl, os, runpy, sys
+_flock = fcntl.flock
+def flock(f, op):
+    if "/task-locks/" in getattr(f, "name", ""):
+        raise OSError(errno.ENOLCK, "No locks available")
+    return _flock(f, op)
+fcntl.flock = flock
+sys.argv = ["$B"] + sys.argv[1:]
+runpy.run_path("$B", run_name="__main__")
+PY
+N1=$(SWITCHBOARD_SESSION_ID=S5 "$B" task request --to "$T/eps:builder" --subject "nolck 1" --key nl1 | awk '{print $1}')
+N2=$(SWITCHBOARD_SESSION_ID=S5 "$B" task request --to "$T/eps:builder" --subject "nolck 2" --key nl2 | awk '{print $1}')
+out=$(SWITCHBOARD_SESSION_ID=S6 python3 "$T/nolck.py" task working "$N1" "$N2" --note nfs 2>&1) && rc=0 || rc=$?
+[ "$rc" = 0 ] && [ "$out" = "$N1 001 working
+$N2 001 working" ] && [ -f "$RD/$N1/001-working.json" ] && [ -f "$RD/$N2/001-working.json" ] \
+  && [ "$(grep -c " task_lock task_lock:[0-9]* .*No locks available.*written without the task lock" "$SWITCHBOARD_STATE/errors.log")" = 1 ] \
+  && ok "flock fails with ENOLCK on the task locks: two transitions are written unlocked, exit 0, one line in errors.log" \
+  || die "ENOLCK: rc $rc: $out / $(cat "$SWITCHBOARD_STATE/errors.log" 2>/dev/null)"
+wk completed "$N1" "$N2" --note done >/dev/null; rm -f "$SWITCHBOARD_STATE/errors.log"
 RO=$(SWITCHBOARD_NOW=$(( $(date +%s) - 8*3600 )) SWITCHBOARD_SESSION_ID=S5 "$B" task request --to "$T/eps:builder" --kind report --subject "old report" --key r4 | awk '{print $1}')
 RN=$(SWITCHBOARD_NOW=$(( $(date +%s) - 8*3600 )) SWITCHBOARD_SESSION_ID=S5 "$B" task request --to "$T/eps:builder" --kind eval --subject "old eval" --key r5 | awk '{print $1}')
 "$B" tasks --stale | has "^$RO " && wk "$RO" >/dev/null && wk seen "$RN" | has -x "$RN seen by east" && out=$("$B" tasks --stale) && ! echo "$out" | has "^$RO " && echo "$out" | has "^$RN  submitted" && ok "tasks --stale lists a report until its worker reads it, and a seen task of another kind stays open and stale" || die "stale with reports: $("$B" tasks --stale)"

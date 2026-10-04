@@ -4817,22 +4817,27 @@ def task_transitions(a, tids):
 
 _SYNC_LATER = [False]  # True in a bulk transition, "due" once one of its tasks was written
 TASK_LOCK_WAIT = 5.0  # seconds a task write waits for another write of the same task here; a holder can wait TREE_WAIT
+_TASK_UNLOCKED = [False]  # True once this run logged a task lock it could not take
 
 
 @contextlib.contextmanager
 def task_lock(tid):
     """STATE/task-locks/<tid>.lock held exclusive around one write of a task's state on this machine: read the
     records, choose the next number, write it. Yields False while another writer holds it past TASK_LOCK_WAIT. With
-    no state dir to lock in it yields True and the write goes ahead unlocked, as before the lock (logged). Two
-    machines writing one number stay merge_task's to settle."""
-    f = None
+    no state dir to lock in, or a filesystem that cannot lock (ENOLCK, ENOTSUP: an NFS or SMB home), it yields True and
+    the write goes ahead unlocked, as before the lock, logged once a run. Two machines writing one number stay
+    merge_task's to settle."""
+    f, locked = None, True
     try:
         (STATE / "task-locks").mkdir(parents=True, exist_ok=True)
         f = open(STATE / "task-locks" / (tid + ".lock"), "a")
+        locked = flock_wait(f, fcntl.LOCK_EX, TASK_LOCK_WAIT)
     except OSError as e:
-        log_error("task_lock", e)
+        if not _TASK_UNLOCKED[0]:
+            _TASK_UNLOCKED[0] = True
+            log_error("task_lock", "%s; written without the task lock" % e)
     try:
-        yield flock_wait(f, fcntl.LOCK_EX, TASK_LOCK_WAIT) if f else True
+        yield locked
     finally:
         if f:
             f.close()
