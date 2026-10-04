@@ -4056,8 +4056,9 @@ def adapter_fields(d):
 # ---------- which Claude process a session runs in ----------
 # The hook input (session_id, cwd, hook_event_name, source) names the session, not its process. Claude Code runs a
 # hook, like a Bash tool call, as a child of its own process through a shell, so the hook walks up past shells and
-# wrappers to the first other process and records it in STATE/claude/: <session id>.json (pid, procStart, cwd) and
-# pid-<pid>.json (the session ids seen in that process; after a clear the newest stands). A CLI call walks up its own
+# wrappers to the first other process and records it in STATE/claude/: <session id>.json (pid, procStart, cwd; when
+# two live processes run one session id, the first) and pid-<pid>.json (procStart and the session ids seen in that
+# process, after a clear the newest standing; each hook writes it for its own process). A CLI call walks up its own
 # process tree to a recorded process. With the session file present its pid is used, as before the walk existed.
 
 WRAPPERS = {"sh", "bash", "dash", "zsh", "ksh", "mksh", "fish", "env", "timeout", "nice", "nohup", "stdbuf", "time"}
@@ -4069,7 +4070,9 @@ def parent(pid):
     try:
         if platform.system() == "Linux":
             st = Path("/proc/%d/stat" % int(pid)).read_text()
-            return int(st.rsplit(")", 1)[1].split()[1]), st[st.index("(") + 1:st.rindex(")")]
+            f = st.rsplit(")", 1)[1].split()
+            _PS.setdefault(str(pid), "" if f[0] in ("Z", "X") else f[19])  # the read proc_start would make
+            return int(f[1]), st[st.index("(") + 1:st.rindex(")")]
         r = subprocess.run(["ps", "-o", "ppid=,comm=", "-p", str(int(pid))], capture_output=True, text=True, timeout=3)
         ppid, _, comm = r.stdout.strip().partition(" ")
         return int(ppid), os.path.basename(comm.strip())
@@ -4119,10 +4122,41 @@ def remember_process(session, recheck=False):
     exactly and wins over a walk; a record made by a walk looks for the file again on recheck (session start and each
     prompt). A record whose process is gone (the same session id reopened in a new process: the desktop app, claude
     --resume) is rewritten on any event. A record naming another live process of the same session id (both run at
-    once) is left as it is, so the two never take turns rewriting it. Returns the record or None; never raises."""
+    once) is left as it is, so the two never take turns rewriting it. Each hook also makes sure the process it runs
+    in has its pid-<pid>.json, which names this session id: that record, not the session's, says whether hooks run in
+    a process (warn_hookless) and which session a process runs (own_session). Returns the session's record or None;
+    never raises."""
     sid = session.get("session_id")
     if not sid:
         return None
+    rec = _remember_session(session, sid, recheck)
+    mark_process(sid)
+    return rec
+
+
+def mark_process(sid):
+    """Make sure pid-<pid>.json of the Claude process this hook runs in exists, has that process's procStart and names
+    sid as its newest session id. A hook in a process already marked for sid reads that one record and writes
+    nothing. A test that asks for no walk has no process to mark. Never raises."""
+    try:
+        hp = hook_process()
+        ps = proc_start(hp) if hp else ""
+        if not ps:
+            return
+        pf = PROCS / ("pid-%d.json" % hp)
+        p = load(pf, None)
+        if not isinstance(p, dict) or p.get("procStart") != ps or not isinstance(p.get("sessions"), dict) or not p["sessions"]:
+            p = {"pid": hp, "procStart": ps, "sessions": {}}
+        elif max(p["sessions"], key=p["sessions"].get) == sid:
+            return  # the hot path: one small read
+        p["sessions"][sid] = time.time()  # real time: the newest session id in a process is the one after a clear
+        save(pf, p)
+    except Exception as e:
+        log_error("mark_process", e)
+
+
+def _remember_session(session, sid, recheck):
+    """remember_process for STATE/claude/<session id>.json, and pid-<pid>.json of the process it names when it writes."""
     try:
         f = PROCS / (slug(sid) + ".json")
         rec = load(f, None)
@@ -4169,22 +4203,26 @@ def claude_session(sid=None, pid=None):
     and the process of a session, and the hooks' record is the fallback. Never raises."""
     try:
         d = session_file(sid=sid) if sid else session_file(pid=pid) if pid else None
+        own = None
         if d:
             sid = d["sessionId"]
         elif pid:  # no file: the newest session id the hooks recorded in this process
             p = load(PROCS / ("pid-%d.json" % int(pid)), None)
             if isinstance(p, dict) and p.get("sessions") and p.get("procStart") == proc_start(pid):
-                sid = max(p["sessions"], key=p["sessions"].get)
+                sid, own = max(p["sessions"], key=p["sessions"].get), (int(pid), p["procStart"])
         rec = load(PROCS / (slug(sid) + ".json"), None) if sid else None
         rec = rec if isinstance(rec, dict) and rec.get("pid") else None
-        if rec and d and d["pid"] != rec.get("pid"):
-            rec = None  # the hooks recorded another process for this session (a walk that went wrong): the file wins
-        if not rec and not d:
+        cwd = (d or {}).get("cwd") or (rec or {}).get("cwd") or ""  # one session id, one cwd, in either process
+        if rec and (d and d["pid"] != rec.get("pid") or own and own[0] != rec.get("pid")):
+            # the hooks recorded another process for this session: a walk that went wrong, when the file names this
+            # one; or another live process of the same session id holds the record. This process is the one asked for
+            rec = None
+        if not rec and not d and not own:
             return None
-        spid = rec["pid"] if rec else d["pid"]
-        ps = (rec or {}).get("procStart") or proc_start(spid) or " ".join(str(d["procStart"]).split())
-        return dict({"sessionId": sid or d["sessionId"], "pid": int(spid), "procStart": ps,
-                     "cwd": (d or {}).get("cwd") or (rec or {}).get("cwd") or ""}, **adapter_fields(d))
+        spid = rec["pid"] if rec else d["pid"] if d else own[0]
+        ps = (rec or {}).get("procStart") or (own or ("", ""))[1] or proc_start(spid) or " ".join(str(d["procStart"]).split())
+        return dict({"sessionId": sid or d["sessionId"], "pid": int(spid), "procStart": ps, "cwd": cwd},
+                    **adapter_fields(d))
     except Exception as e:
         log_error("claude_session", e)
         return None
@@ -4251,8 +4289,8 @@ def existing(p):
 
 def warn_hookless(d=None):
     """For CLI calls: one line on stderr when the calling session d (own_session() when not given) runs without
-    switchboard's hooks. Session start, prompts, PostToolUse and Stop record the session's process in STATE/claude/,
-    so a session found by its session file with no record there for its process has no hooks: the desktop app's
+    switchboard's hooks. Session start, prompts, PostToolUse and Stop mark the process they run in, STATE/claude/
+    pid-<pid>.json, so a process with no mark of its own, at its procStart, has no hooks: the desktop app's
     --plugin-dir copy of the plugin over SSH has no hooks folder and replaces the installed plugin. Reads only; a test
     that asks for no walk gets no warning."""
     if (board_env("ALLOW_TMP") and board_env("NOWALK")) or board_env("OFF"):
@@ -4261,11 +4299,11 @@ def warn_hookless(d=None):
     if not d:
         return
     try:
-        rec = load(PROCS / (slug(d["sessionId"]) + ".json"), None)
-        # a record from an earlier process of the same session id (the desktop app reopens a session in a new
-        # process) says nothing about this one
-        if isinstance(rec, dict) and str(rec.get("pid")) == str(d["pid"]) \
-                and (not rec.get("procStart") or rec["procStart"] == proc_start(d["pid"])) \
+        p = load(PROCS / ("pid-%d.json" % int(d["pid"])), None)
+        # by process, not by session id: another process of the same session id (an earlier one the desktop app
+        # reopened it from, or one that runs it at the same time) says nothing about this one; a record for a pid that
+        # now runs another process neither
+        if isinstance(p, dict) and p.get("procStart") and p["procStart"] == proc_start(d["pid"]) \
                 or not os.access(existing(STATE), os.W_OK):
             return  # the hooks ran in this process, or ran and could not write: status names that case
         line = ('switchboard: this session runs without switchboard\'s hooks (no notes, holds, link headers or wake). '
