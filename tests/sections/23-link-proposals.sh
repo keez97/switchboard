@@ -260,6 +260,10 @@ nx=$(ptu "$T/py" X2); TX3=$(xrq "client: regenerate" kx3 | awk 'NR==1{print $1}'
   || die "unstamped: $(xv "$TX1") / $(xv "$TX3") / rc $rc $out"
 echo "$nx" | has "a task for you.*$TX1" && echo "$nx" | has "^Link $LX does not cover this request (scope does not name the subject, and the covers list was not shown at acceptance), so it is information" \
   && ok "the worker's note for such a request says information only, naming the list not shown" || die "unstamped note: $nx"
+lmode(){ "$B" links --json | jq -r --arg l "$1" '(.links + .proposals)[] | select(.id == $l) | .covers_mode'; }
+[ "$(lmode "$LX")" = "list and scope words" ] && [ "$("$B" task "$TX1" --json | jq -r .link.covers_mode)" = "list and scope words" ] \
+  && ok "links --json and task --json give covers_mode \"list and scope words\" for such a link" \
+  || die "unstamped covers_mode: $(lmode "$LX") / $("$B" task "$TX1" --json | jq -c .link)"
 
 # a covers list changed between the acceptor's note and its accept: the accept output and event name the list stamped
 fx_repos rx ry
@@ -269,6 +273,7 @@ SWITCHBOARD_SESSION_ID=Y1 "$B" role lead >/dev/null; SWITCHBOARD_SESSION_ID=Y2 "
 LE=$(try env SWITCHBOARD_SESSION_ID=Y1 "$B" link --from "$T/rx:lead" --to "$T/ry:doer" --scope "build item-x" --covers "item-x" | awk 'NR==1{print $2}')
 ne=$(ptu "$T/ry" Y2); FE="$SWITCHBOARD_DIR/links/$LE.json"
 echo "$ne" | has -F "It covers tasks whose subject starts with: item-x. " || die "setup: note for $LE: $ne"
+[ "$(lmode "$LE")" = list ] && ok "a proposal, which nobody has accepted yet, reads covers_mode list" || die "proposal covers_mode: $(lmode "$LE")"
 jq '.covers = ["item-x", "deploy"]' "$FE" > "$T/le.json" && mv "$T/le.json" "$FE"   # the proposer widens it now
 out=$(SWITCHBOARD_SESSION_ID=Y2 "$B" link accept "$LE" 2>&1) || die "setup: $LE not accepted: $out"
 cs="It covers tasks whose subject starts with: item-x, deploy. Until "
@@ -276,6 +281,7 @@ cs="It covers tasks whose subject starts with: item-x, deploy. Until "
   && ev "link $LE accepted by" | has -F "within: build item-x. $cs" \
   && ok "a covers list changed after the note: the accept output and the accept event name the list stamped" \
   || die "accept covers: $out / $(ev "link $LE accepted by") / $(cat "$FE")"
+[ "$(lmode "$LE")" = list ] && ok "an acceptance that carries the list reads covers_mode list" || die "stamped covers_mode: $(lmode "$LE")"
 
 [ ! -s "$SWITCHBOARD_STATE/errors.log" ] && ok "no hook error was swallowed" || die "errors: $(cat "$SWITCHBOARD_STATE/errors.log")"
 

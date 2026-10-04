@@ -5141,10 +5141,16 @@ def covers_of(l):
 
 
 def covers_mode(l):
-    """How link l judges a subject, as links --json and task --json give it: "list" (its covers list), "scope words"
-    (no covers list, made before 0.7.0) or "none" (a covers key that does not read, or an empty list: covers nothing)."""
+    """How link l judges a subject, as links --json and task --json give it: "list" (its covers list), "list and scope
+    words" (an accepted link two sessions made whose acceptance does not carry its list, covers_shown: link_covers
+    needs both), "scope words" (no covers list, made before 0.7.0) or "none" (a covers key that does not read, or an
+    empty list: covers nothing). A proposal, which nobody has accepted yet, reads "list"."""
     cov = covers_of(l)
-    return "scope words" if cov == COVERS_NONE else "list" if cov else "none"
+    if cov == COVERS_NONE:
+        return "scope words"
+    if not cov:
+        return "none"
+    return "list" if covers_shown(l) or l.get("state") == "proposed" else "list and scope words"
 
 
 def covers_shown(l):
@@ -5224,7 +5230,7 @@ def link_check(req, reader=None, d=None, timeout=20):
     """None when the request names no link, else the link judged now against the request: {id, verdict, scope,
     covers, covers_mode, active, from_is_requester, to_is_worker, scope_covers_subject}. verdict is "ok" or the first
     failing reason. covers is the link's covers list, or COVERS_NONE for a link with none, judged by its scope words;
-    covers_mode is covers_mode, as links --json gives it; and scope_covers_subject is link_covers either way (a link
+    covers_mode is covers_mode, as links --json gives it ("list and scope words" where link_covers needs both); and scope_covers_subject is link_covers either way (a link
     two sessions made whose acceptor was not shown its list, covers_shown, needs its scope words too).
     A link two sessions made gives authority to the two seats that agreed to it, never to the next holder of an end:
     the request's seat must be the one at `from` (a request with no seat fails: seats and links two sessions make
