@@ -5,7 +5,7 @@ fx_delta; mkrepo "$T/theta"
 # shellcheck disable=SC2034  # THETA is read by lib.sh's remote()
 THETA=$("$B" register "$T/theta" | tail -1 | awk '{print $NF}')
 remote R2 "theta @runner" 60   # S5 directs a session on the other machine through link "remote test"
-SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/theta:runner" --scope "remote test" --to-session bridge:session_R2 >/dev/null || die "setup: remote link"
+SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/theta:runner" --scope "remote test" --covers "remote runs" --to-session bridge:session_R2 >/dev/null || die "setup: remote link"
 
 python3 - "$T/delta" "bridge:session_R2" <<'PY' | "$B" hook >/dev/null
 import json,sys; print(json.dumps({"hook_event_name":"PostToolUse","cwd":sys.argv[1],"session_id":"S5","tool_name":"SendMessage","tool_input":{"to":sys.argv[2],"message":"run it"},"tool_response":{"success":True,"msg_id":"aaaaaaaa-1111-2222-3333-444444444444"}}))

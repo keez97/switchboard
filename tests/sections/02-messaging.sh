@@ -17,7 +17,7 @@ seat SF "$T/alpha" newformat 2; hook SessionStart "$T/alpha" SF >/dev/null
 
 SWITCHBOARD_SESSION_ID=S1 "$B" role roadmap >/dev/null; SWITCHBOARD_SESSION_ID=S2 "$B" role implementer >/dev/null
 SWITCHBOARD_SESSION_ID=S3 "$B" role implementer 2>/dev/null | has "now holds" && true
-LID=$(SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "order the next work items" --cap 2 | awk 'NR==1{print $2}')
+LID=$(SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "order the next work items" --covers "order the next work items" --cap 2 | awk 'NR==1{print $2}')
 hook SessionStart "$T/gamma" sG7 | has "link $LID created" && ok "link creation is announced to every repo" || die "link not announced"
 up "$T/beta" S2 "$(peer "$T/sock.$P1" road "next: build X")" | has "Robin authorised alpha:roadmap" && ok "direction over a link arrives with an authority header" || die "no authority header"
 up "$T/alpha" S1 "$(peer "$T/sock.$P2" impl "X is done")" | has "report from your linked counterpart" && ok "the reverse direction is a report, not a direction" || die "reverse not a report"

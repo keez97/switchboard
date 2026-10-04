@@ -25,7 +25,7 @@ WEB=$(pj 'd["id"]' "$D"/registry/local-*."$HOST".json); case "$WEB" in "local-$H
 grep -l "\"abs:$HOST:$T/outside\"" "$D"/holds/*.json >/dev/null || die "setup: the hold outside HOME is not an abs: path"
 "$B" watch "$T/api" path "$T/web/schema.json" >/dev/null; "$B" scan github.com/you/api
 [ -f "$D/subs/github.com_you_api.auto.$HOST.json" ] || die "setup: no auto watch for api"
-L=$(SWITCHBOARD_SESSION_ID=A1 "$B" link --from "$T/api:backend" --to "$T/web:frontend" --scope "client" | awk 'NR==1{print $2}')
+L=$(SWITCHBOARD_SESSION_ID=A1 "$B" link --from "$T/api:backend" --to "$T/web:frontend" --scope "client" --covers "client" | awk 'NR==1{print $2}')
 T1=$(SWITCHBOARD_SESSION_ID=A1 "$B" task request --to web:frontend --subject "client: one" --key k1 --body one 2>/dev/null | awk '{print $1}')
 SWITCHBOARD_SESSION_ID=W1 "$B" task "$T1" >/dev/null; [ -f "$D/tasks/web--frontend/cursor-$HOST.json" ] || die "setup: web did not read $T1"
 hook Stop "$T/api" A1 >/dev/null   # the watch's first snapshot

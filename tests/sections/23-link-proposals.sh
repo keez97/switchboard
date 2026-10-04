@@ -22,7 +22,7 @@ PY
 NOW=$(date +%s)
 
 # ---- propose
-out=$(SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "order the next work items")
+out=$(SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "order the next work items" --covers "order the next work items")
 LP=$(echo "$out" | awk 'NR==1{print $2}')
 [ "$(L "$LP" .state)" = proposed ] && [ "$(L "$LP" .cap)" = 0 ] && [ "$(L "$LP" .span)" = 86400 ] && { [ "$(L "$LP" .until)" -le "$NOW" ] || [ "$(L "$LP" .until)" -le $((NOW + 5)) ]; } \
   && e=$(L "$LP" .expires) && [ "$e" -gt $((NOW + 86400 - 60)) ] && [ "$e" -lt $((NOW + 86400 + 60)) ] && echo "$out" | has "proposed, not active" \
@@ -83,7 +83,7 @@ ptu "$T/beta" S2 | has "The link's scope makes this an instruction you act on" &
 try env SWITCHBOARD_SESSION_ID=S2 "$B" link accept "$LP" | has "already active" && ok "accepting twice changes nothing" || die "second accept"
 
 # ---- a session asks for no more than the defaults
-lim(){ try env SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "limits" "$@"; }
+lim(){ try env SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "limits" --covers "limits" "$@"; }
 n=$(ls "$SWITCHBOARD_DIR"/links/*.json | wc -l)
 c=$(lim --until 2d); d=$(lim --to-session open); e=$(lim --cap -1)
 for x in "$c" "$d"; do echo "$x" | has "refused.*a longer link, or extending one, is Robin's" || die "not refused: $x"; done
@@ -106,14 +106,14 @@ try env SWITCHBOARD_SESSION_ID=S1 "$B" bind "$LP" implementer --session "uds:$T/
 env -u SWITCHBOARD_SESSION_ID "$B" link-cap "$LP" 40 >/dev/null && [ "$(L "$LP" .cap)" = 40 ] && ok "the owner's terminal still raises a cap" || die "terminal raise"
 
 # ---- decline, expiry, unlink
-LD=$(SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "second thing" | awk 'NR==1{print $2}')
+LD=$(SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "second thing" --covers "second thing" | awk 'NR==1{print $2}')
 SWITCHBOARD_SESSION_ID=S2 "$B" link decline "$LD" --reason "not this session's work" >/dev/null
 L "$LD" .closed_reason | has 'declined by beta:implementer (session "impl" on east): not this session.s work' && [ "$(L "$LD" '.revoked > 0')" = true ] \
   && ev "link $LD closed: declined" | has "^2 False" && up "$T/alpha" S1 "x" | ctx | has "link $LD closed: declined by" \
   && ok "a decline closes the proposal, is an event for both repos and reaches the proposer" || die "decline: $(cat "$SWITCHBOARD_DIR/links/$LD.json")"
 [ -z "$(ptu "$T/beta" S2 | grep "closed: declined")" ] && ok "the declining session is not told of its own decline" || die "decliner told of its own decline"
 try env SWITCHBOARD_SESSION_ID=S2 "$B" link accept "$LD" | has "not an open proposal" && ok "a declined proposal cannot be accepted" || die "accepted after decline"
-LE=$(SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "third thing" | awk 'NR==1{print $2}')
+LE=$(SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "third thing" --covers "third thing" | awk 'NR==1{print $2}')
 jq ".expires = $((NOW - 1))" "$SWITCHBOARD_DIR/links/$LE.json" > "$T/le" && mv "$T/le" "$SWITCHBOARD_DIR/links/$LE.json"
 try env SWITCHBOARD_SESSION_ID=S2 "$B" link accept "$LE" | has "expired unanswered" && ok "an expired proposal cannot be accepted" || die "accepted after expiry"
 hook UserPromptSubmit "$T/gamma" S3 >/dev/null
@@ -123,22 +123,22 @@ SWITCHBOARD_SESSION_ID=S2 "$B" unlink "$LP" --reason "done" >/dev/null && [ "$(L
   && L "$LP" .closed_reason | has -x 'ended by beta:implementer (session "impl" on east): done' && ok "a session holding an end may end the link" || die "unlink from an end"
 
 # ---- an open other end: a session there holding no role accepts and is bound
-LO=$(SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/gamma:reviewer" --scope "review the plan" | awk 'NR==1{print $2}')
+LO=$(SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/gamma:reviewer" --scope "review the plan" --covers "review the plan" | awk 'NR==1{print $2}')
 ptu "$T/gamma" S3 | has "Its end gamma:reviewer is open and this session holds no role here; accepting binds this session to it" && ok "an open other end is offered to a session there with no role" || die "open-end offer"
 SWITCHBOARD_SESSION_ID=S3 "$B" link accept "$LO" | has "this session now holds gamma:reviewer" && "$B" who --role reviewer | has "sock.$P3" && [ "$(L "$LO" .state)" = active ] \
   && ok "accepting binds that session to the end" || die "open-end accept"
 
 # ---- the proposer holds one end
-out=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/alpha:roadmap" --scope "taking" 2>&1)
+out=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/alpha:roadmap" --scope "taking" --covers "taking" 2>&1)
 echo "$out" | has "delta:lead held by this session (taken now)" && "$B" who --role lead | has "sock.$P5" && ok "a session with no role takes a free end in its repo as it proposes" || die "taking: $out"
-try env SWITCHBOARD_SESSION_ID=S2 "$B" link --from "$T/beta:other" --to "$T/alpha:roadmap" --scope "x" | has "This session holds beta:implementer" \
-  && try env SWITCHBOARD_SESSION_ID=S2 "$B" link --from "$T/gamma:x" --to "$T/alpha:roadmap" --scope "x" | has "needs a session in that repo" \
+try env SWITCHBOARD_SESSION_ID=S2 "$B" link --from "$T/beta:other" --to "$T/alpha:roadmap" --scope "x" --covers "test work" | has "This session holds beta:implementer" \
+  && try env SWITCHBOARD_SESSION_ID=S2 "$B" link --from "$T/gamma:x" --to "$T/alpha:roadmap" --scope "x" --covers "test work" | has "needs a session in that repo" \
   && ok "a session proposes only from an end it holds or can take" || die "proposer end check"
-LT=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/beta:implementer" --scope "either end" | awk 'NR==1{print $2}')
-SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/beta:implementer" --to "$T/alpha:roadmap" --scope "reverse" | has "alpha:roadmap held by this session" && ok "the proposer may hold the --to end" || die "proposer at --to"
+LT=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/beta:implementer" --scope "either end" --covers "either end" | awk 'NR==1{print $2}')
+SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/beta:implementer" --to "$T/alpha:roadmap" --scope "reverse" --covers "reverse" | has "alpha:roadmap held by this session" && ok "the proposer may hold the --to end" || die "proposer at --to"
 
 # ---- the owner's terminal is unchanged
-LW=$(env -u SWITCHBOARD_SESSION_ID "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "owner work" | awk 'NR==1{print $2}'); T1=$(date +%s)
+LW=$(env -u SWITCHBOARD_SESSION_ID "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "owner work" --covers "owner work" | awk 'NR==1{print $2}'); T1=$(date +%s)
 u=$(L "$LW" .until); [ "$(L "$LW" '.state // "none"')" = none ] && [ "$(L "$LW" .cap)" = 100 ] && [ "$u" -ge $((T1 + 7*86400 - 60)) ] && [ "$u" -le $((T1 + 7*86400 + 5)) ] \
   && up "$T/beta" S2 "$(peer "$T/sock.$P1" road "owner direction")" | ctx | has "Robin authorised alpha:roadmap on" && ok "a link from the owner's terminal is active at once, 7 days, cap 100, with the owner's header" || die "owner link: $(cat "$SWITCHBOARD_DIR/links/$LW.json")"
 ev "link $LW created" | has "^1 True .*within: owner work (100 messages a day)$" && ok "the owner's link is still announced to every repo" || die "owner event: $(ev "link $LW created")"
@@ -147,9 +147,9 @@ ptu "$T/alpha" S1 >/dev/null; tcap 50; tcap 20; tcap 50
 [ "$(ptu "$T/alpha" S1 | grep -o "link $LW cap set to [0-9]*" | awk '{print $NF}' | tr '\n' ' ')" = "50 20 50 " ] && ok "three cap changes in one second are three events, in the order they were made" || die "same-second caps: $(ls "$SWITCHBOARD_DIR/events" | tail -4)"
 tcap 100; out=$(try env -u SWITCHBOARD_SESSION_ID "$B" link-cap "$LW" -1)
 echo "$out" | has "refused. This command sets link $LW's cap to -1, which is not a cap. Nothing was written." && [ "$(L "$LW" .cap)" = 100 ] && ok "a negative cap is refused from the owner's terminal too, nothing written" || die "terminal -1: $out cap $(L "$LW" .cap)"
-n=$(ls "$SWITCHBOARD_DIR"/links/*.json | wc -l); out=$(try env -u SWITCHBOARD_SESSION_ID "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "negative" --cap -1)
+n=$(ls "$SWITCHBOARD_DIR"/links/*.json | wc -l); out=$(try env -u SWITCHBOARD_SESSION_ID "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "negative" --covers "negative" --cap -1)
 echo "$out" | has "is not a cap" && [ "$(ls "$SWITCHBOARD_DIR"/links/*.json | wc -l)" -eq "$n" ] && ok "a terminal link with a negative cap is refused, nothing written" || die "terminal link -1: $out"
-fx_repos cz0 cz1; LZ=$(env -u SWITCHBOARD_SESSION_ID "$B" link --from "$T/cz0:a" --to "$T/cz1:b" --scope "cap zero" --cap 0 | awk 'NR==1{print $2}')
+fx_repos cz0 cz1; LZ=$(env -u SWITCHBOARD_SESSION_ID "$B" link --from "$T/cz0:a" --to "$T/cz1:b" --scope "cap zero" --covers "cap zero" --cap 0 | awk 'NR==1{print $2}')
 ev "link $LZ created" | has "within: cap zero (no cap)$" && ! ev "link $LZ created" | has "cap no cap" && ok "a terminal link with --cap 0 is announced with no cap" || die "cap 0 event: $(ev "link $LZ created")"
 
 # ---- the PreToolUse guard: owner-only forms and detached link commands from any session
@@ -178,7 +178,7 @@ Q1P=$(fake Q1 "$T/pa" lead1); Q2P=$(fake Q2 "$T/pb" doer2); Q3P=$(fake Q3 "$T/pc
 for s in "Q1 pa" "Q2 pb" "Q3 pc" "Q4 pd"; do set -- $s; hook SessionStart "$T/$2" $1 >/dev/null; done
 SWITCHBOARD_SESSION_ID=Q1 "$B" role lead >/dev/null; SWITCHBOARD_SESSION_ID=Q2 "$B" role doer >/dev/null
 SWITCHBOARD_SESSION_ID=Q3 "$B" role boss >/dev/null; SWITCHBOARD_SESSION_ID=Q4 "$B" role hand >/dev/null
-prop(){ try env SWITCHBOARD_SESSION_ID="$1" "$B" link --from "$T/pa:lead" --to "$T/pb:doer" --scope "$2" | awk 'NR==1{print $2}'; }
+prop(){ try env SWITCHBOARD_SESSION_ID="$1" "$B" link --from "$T/pa:lead" --to "$T/pb:doer" --scope "$2" --covers "$2" | awk 'NR==1{print $2}'; }
 hdr(){ up "$T/$1" "$2" "$(peer "$T/sock.$3" x "$4")" | ctx; }
 LA=$(prop Q1 "agent pair A"); SWITCHBOARD_SESSION_ID=Q2 "$B" link accept "$LA" >/dev/null
 # a /clear in the same process: new session id, same seat
@@ -218,7 +218,7 @@ LE2=$(prop Q8 "agent pair E"); SWITCHBOARD_SESSION_ID=Q9 "$B" link accept "$LE2"
 kill "$Q9P"; hook UserPromptSubmit "$T/pc" Q3 >/dev/null
 L "$LE2" .closed_reason | has "no longer holds pb:doer: its session is gone" && ok "a session gone without SessionEnd closes the agent link when it is reaped" || die "reap: $(cat "$SWITCHBOARD_DIR/links/$LE2.json")"
 # an owner link is unchanged: its end opens, is offered, and the next holder gets the owner's header
-LOW=$(env -u SWITCHBOARD_SESSION_ID "$B" link --from "$T/pc:boss" --to "$T/pd:hand" --scope "owner pair" | awk 'NR==1{print $2}')
+LOW=$(env -u SWITCHBOARD_SESSION_ID "$B" link --from "$T/pc:boss" --to "$T/pd:hand" --scope "owner pair" --covers "owner pair" | awk 'NR==1{print $2}')
 send_end "$T/pd" Q4 exit >/dev/null
 seat QA "$T/pd" hand10; hook SessionStart "$T/pd" QA | ctx | has "link $LOW has an open end hand" && SWITCHBOARD_SESSION_ID=QA "$B" role hand >/dev/null \
   && [ "$(L "$LOW" '.revoked // 0')" = 0 ] && hdr pd QA "$Q3P" "owner direction" | has "Robin authorised pc:boss" && ok "an owner link survives its end changing holder, as before" || die "owner link: $(cat "$SWITCHBOARD_DIR/links/$LOW.json")"

@@ -8,7 +8,7 @@ HLINE="west namespaces=\"agent-board-task\" $(cat "$T/hl.pub")"; echo "$HLINE" >
 # the board's ssh-keygen counts its verifies, and with SLOWSIG set hangs in them; the test's own calls use $SSHK
 mkdir -p "$T/shim"; printf '#!/bin/sh\nif [ "$2" = verify ]; then echo x >> "%s/verifies"; [ -n "$SLOWSIG" ] && exec sleep 10; fi\nexec "%s" "$@"\n' "$T" "$SSHK" > "$T/shim/ssh-keygen"
 chmod +x "$T/shim/ssh-keygen"; export PATH="$T/shim:$PATH"; : > "$T/verifies"; nver(){ wc -l < "$T/verifies" | tr -d ' '; }
-LK=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/eps:builder" --scope "evaluate app builds for eps" --until 30d | awk 'NR==1{print $2}')
+LK=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/eps:builder" --scope "evaluate app builds for eps" --covers "app" --until 30d | awk 'NR==1{print $2}')
 [ -n "$LK" ] || die "setup: link delta:lead -> eps:builder"
 
 rq(){ # subject key [machine, or - for none] [signing key]: a linked request, rewritten as that machine's and signed with the key
@@ -71,9 +71,9 @@ out=$(same "$TN" "unsigned request from another machine (signed, not verified: n
   && ok "with no allowed_signers the request is information, and the answer is not cached" || die "no signers: $out $(cat "$SC")"
 mv "$T/as.bak" "$AS"; [ "$(tv "$TN")" = ok ] || die "no signers, restored: $(tv "$TN")"
 
-jq '.scope = "docs only"' "$SWITCHBOARD_DIR/links/$LK.json" > "$T/lk" && mv "$T/lk" "$SWITCHBOARD_DIR/links/$LK.json"   # a request the link does not cover is refused, so the scope covers it for the write
-TS=$(rq "docs only" s1 west "$T/other"); jq '.scope = "evaluate app builds for eps"' "$SWITCHBOARD_DIR/links/$LK.json" > "$T/lk" && mv "$T/lk" "$SWITCHBOARD_DIR/links/$LK.json"; n0=$(nver); v=$(nv "$TS")
-[ "$v" = "scope does not name the subject" ] && [ "$(nver)" = "$n0" ] && ok "a verdict already not ok is never verified: the hook runs no ssh-keygen" || die "scope first: $v $(nver)/$n0"
+jq '.covers = ["docs only"]' "$SWITCHBOARD_DIR/links/$LK.json" > "$T/lk" && mv "$T/lk" "$SWITCHBOARD_DIR/links/$LK.json"   # a request the link does not cover is refused, so the covers list covers it for the write
+TS=$(rq "docs only" s1 west "$T/other"); jq '.covers = ["app"]' "$SWITCHBOARD_DIR/links/$LK.json" > "$T/lk" && mv "$T/lk" "$SWITCHBOARD_DIR/links/$LK.json"; n0=$(nver); v=$(nv "$TS")
+[ "$v" = "covers list does not name the subject" ] && [ "$(nver)" = "$n0" ] && ok "a verdict already not ok is never verified: the hook runs no ssh-keygen" || die "scope first: $v $(nver)/$n0"
 
 TT=$(rq "app@t1" t1 west "$T/hl"); export SLOWSIG=1; s0=$(date +%s%N); v=$(nv "$TT"); ms=$(( ($(date +%s%N) - s0) / 1000000 )); unset SLOWSIG
 echo "$v" | has "^unsigned request from another machine (signed, not verified: .*timed out" && [ "$ms" -lt 4000 ] && nosig "$TT" && [ "$(tv "$TT")" = ok ] \

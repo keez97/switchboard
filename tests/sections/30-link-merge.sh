@@ -268,7 +268,7 @@ ok(drv == [drv_of(s, k, state(m)) for m in ("east", "west") for s, k in (("merge
                                                                             ("merge-record", "%O %A %B %P"))] and git(clone("west"), "config", "merge.board-record.name")[1].strip() != "",
    "board sync sets the board-link and board-record merge drivers in the .git/config of each clone, at the stable path", str(drv))
 hook("east", "SessionStart", T + "/alpha", "S1"); on("east", ["role", "roadmap"], SWITCHBOARD_SESSION_ID="S1")
-LA = lid_of(on("east", ["link", "--from", T + "/alpha:roadmap", "--to", T + "/beta:implementer", "--scope", "merge test"],
+LA = lid_of(on("east", ["link", "--from", T + "/alpha:roadmap", "--to", T + "/beta:implementer", "--scope", "merge test", "--covers", "merge test"],
                SWITCHBOARD_SESSION_ID="S1", SWITCHBOARD_TEST_PROPOSE="1")[1])
 hook("west", "SessionStart", T + "/beta", "S2"); on("west", ["role", "implementer"], SWITCHBOARD_SESSION_ID="S2")
 round_()
@@ -289,7 +289,7 @@ ok(same(LA) and x.get("revoked") == m["revoked"] and "proposal expired" in x.get
 # unlink and a cap change on east, a cap change on west; synced by board sync, so its pull with autostash merges them
 pair("cap")
 hook("east", "SessionStart", T + "/alpha", "S1")
-LC = lid_of(on("east", ["link", "--from", T + "/alpha:lead", "--to", T + "/beta:builder", "--scope", "cap test", "--cap", "5",
+LC = lid_of(on("east", ["link", "--from", T + "/alpha:lead", "--to", T + "/beta:builder", "--scope", "cap test", "--covers", "cap test", "--cap", "5",
                        "--to-session", "open"], SWITCHBOARD_SESSION_ID="S1")[1])
 setup(LC != "", "link on east")
 round_(front=True)
@@ -305,7 +305,7 @@ ok(clean("east") and clean("west") and same(LC) and x.get("revoked") == rev and 
 # two different closes; the earlier is on the machine that syncs second, so the merge keeps its own side
 pair("close")
 hook("east", "SessionStart", T + "/alpha", "S1")
-LD = lid_of(on("east", ["link", "--from", T + "/alpha:lead", "--to", T + "/beta:builder", "--scope", "close test", "--to-session", "open"],
+LD = lid_of(on("east", ["link", "--from", T + "/alpha:lead", "--to", T + "/beta:builder", "--scope", "close test", "--covers", "close test", "--to-session", "open"],
                SWITCHBOARD_SESSION_ID="S1")[1])
 setup(LD != "", "link on east")
 round_()
@@ -401,7 +401,7 @@ ok(clean("east") and clean("west") and same_file("roles/" + rp[0]) and x.get("se
 # and that session gets messages over the link
 pair("accept2")
 hook("east", "SessionStart", T + "/alpha", "S1"); on("east", ["role", "roadmap"], SWITCHBOARD_SESSION_ID="S1")
-LB = lid_of(on("east", ["link", "--from", T + "/alpha:roadmap", "--to", T + "/beta:implementer", "--scope", "two accepts"],
+LB = lid_of(on("east", ["link", "--from", T + "/alpha:roadmap", "--to", T + "/beta:implementer", "--scope", "two accepts", "--covers", "two accepts"],
                SWITCHBOARD_SESSION_ID="S1", SWITCHBOARD_TEST_PROPOSE="1")[1])
 hook("west", "SessionStart", T + "/beta", "S2"); hook("east", "SessionStart", T + "/beta", "S4")
 round_()
@@ -451,7 +451,7 @@ for name, front in (("bad", False), ("stash", True)):
 os.rename(os.environ["HOME"] + "/.claude/board", T + "/board.away")
 pair("noboard")
 hook("east", "SessionStart", T + "/alpha", "S1"); on("east", ["role", "roadmap"], SWITCHBOARD_SESSION_ID="S1")
-LN = lid_of(on("east", ["link", "--from", T + "/alpha:roadmap", "--to", T + "/beta:implementer", "--scope", "no board"],
+LN = lid_of(on("east", ["link", "--from", T + "/alpha:roadmap", "--to", T + "/beta:implementer", "--scope", "no board", "--covers", "no board"],
                SWITCHBOARD_SESSION_ID="S1", SWITCHBOARD_TEST_PROPOSE="1")[1])
 hook("west", "SessionStart", T + "/beta", "S2"); on("west", ["role", "implementer"], SWITCHBOARD_SESSION_ID="S2")
 for m in ("east", "west"):  # nor the state dir's cli link: with no ~/.claude/board leading to this CLI and no

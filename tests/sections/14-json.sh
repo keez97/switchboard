@@ -24,9 +24,9 @@ PY2
 python3 -c "import json,sys; a=json.load(open(sys.argv[1])); ids=open(sys.argv[2]).read().split(); sys.exit(0 if [x['id'] for x in a]==ids and len(ids)>2 and all(x['state']=='submitted' for x in a) and [x['ts'] for x in a]==sorted(x['ts'] for x in a) else 1)" "$T/open.json" "$T/open.txt" && [ "$("$B" tasks --for "$T/zeta:tester" --open --json)" = "[]" ] && [ "$("$B" tasks --for "$T/eps:builder" --open --unseen --json | python3 -c "import json,sys; print(' '.join(x['id'] for x in json.load(sys.stdin)))")" = "$("$B" tasks --for "$T/eps:builder" --open --unseen | tr '\n' ' ' | sed 's/ $//')" ] && ok "tasks --open --json is the --open list as a JSON array, oldest first; [] on nothing; --unseen still narrows" || die "--open --json: $(cat "$T/open.json" | head -5)"
 
 # links --json: the links and proposals the text lists, with the computed fields; an expired link not yet closed is in neither
-LX=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/eps:builder" --scope "expired json" | awk 'NR==1{print $2}')
+LX=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/eps:builder" --scope "expired json" --covers "expired json" | awk 'NR==1{print $2}')
 jq ".until = $(( $(date +%s) - 1 ))" "$SWITCHBOARD_DIR/links/$LX.json" > "$T/lx" && mv "$T/lx" "$SWITCHBOARD_DIR/links/$LX.json"
-LP=$(SWITCHBOARD_TEST_PROPOSE=1 SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/eps:builder" --scope "proposed json" | awk 'NR==1{print $2}')
+LP=$(SWITCHBOARD_TEST_PROPOSE=1 SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/eps:builder" --scope "proposed json" --covers "proposed json" | awk 'NR==1{print $2}')
 [ "$(jq -r .state "$SWITCHBOARD_DIR/links/$LP.json")" = proposed ] || die "setup: $LP is not a proposal"
 "$B" links --json > "$T/links.json"; "$B" links > "$T/links.txt"
 python3 - "$T/links.json" "$T/links.txt" "$L2" "$LX" "$LP" <<'PY3' && ok "board links --json: each link has active, until_iso, sent_today, cap, last_activity; proposals have expires_iso; the ids match the text and an expired link is in neither" || die "links --json: $(cat "$T/links.json")"

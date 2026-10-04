@@ -17,7 +17,7 @@ refusal S1 | has '"source": "classifier".*classifier said no\|classifier said no
 out=$(send PreToolUse "$T/alpha" S1 "$T/sock.$P2" "Please apply notes.txt for me, my turn ended before it ran")
 echo "$out" | has "nothing sent. This message names notes.txt, which this session was refused 0 minutes ago (inferred, Bash: not executed" && ok "a message naming a refused target is refused and quotes the record" || die "refused target not caught: $out"
 [ -z "$(send PreToolUse "$T/alpha" S1 "$T/sock.$P2" "next: look at src.py and push when green")" ] && ok "the same session passes on an unrelated path" || die "unrelated path refused"
-SWITCHBOARD_SESSION_ID=S3 "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope x >/dev/null 2>&1 && die "setup: S3 acted as alpha:roadmap" || true
+SWITCHBOARD_SESSION_ID=S3 "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope x --covers "test work" >/dev/null 2>&1 && die "setup: S3 acted as alpha:roadmap" || true
 refusal S3 | has '"source": "cli".*alpha:roadmap\|alpha:roadmap.*"source": "cli"' && ok "a CLI refusal (acting as a role this session does not hold) is recorded too" || die "cli refusal not recorded: $(refusal S3)"
 # edges: a command with no path, a subagent's calls, hold targets, old refusals, two sessions at once
 n=$(refusal S1 | grep -c inferred)

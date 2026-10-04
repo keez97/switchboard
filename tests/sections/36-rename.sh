@@ -48,7 +48,7 @@ SWITCHBOARD_SESSION_ID=S1 "$B" role lead >/dev/null; SWITCHBOARD_SESSION_ID=S2 "
 SWITCHBOARD_NOW=$(date +%s); export SWITCHBOARD_NOW AGENT_BOARD_NOW=$SWITCHBOARD_NOW
 TQ=$(SWITCHBOARD_SESSION_ID=S1 "$B" task request --to "$T/beta:worker" --subject "eq task" --key eq1 --no-sign 2>/dev/null | awk '{print $1}')
 "$B" hold "$T/beta/src" --until 2d --reason "eq hold" >/dev/null
-LP=$(SWITCHBOARD_SESSION_ID=S1 SWITCHBOARD_TEST_PROPOSE=1 "$B" link --from "$T/alpha:lead" --to "$T/beta:worker" --scope "eq scope" 2>/dev/null | awk 'NR==1{print $2}')
+LP=$(SWITCHBOARD_SESSION_ID=S1 SWITCHBOARD_TEST_PROPOSE=1 "$B" link --from "$T/alpha:lead" --to "$T/beta:worker" --scope "eq scope" --covers "eq scope" 2>/dev/null | awk 'NR==1{print $2}')
 [ -n "$TQ" ] && [ -n "$LP" ] || die "setup: task and proposal for the notes"
 notes(){ # cli tag: what S2 in beta is told by that copy: its session start, a hold refusal, a link-guard refusal, an
   # unlinked peer's message
@@ -61,6 +61,8 @@ notes "$M" main; notes "$B" branch
 python3 - "$T/notes-main" "$T/notes-branch" "$TQ" "$LP" <<'PY' && ok "on a live machine's setup the notes are main's: session start (task, proposal, hold), hold and link refusals, a peer's message; every CLI path is ~/.claude/board, each note begins switchboard" || die "notes differ from main's: $(diff "$T/notes-main" "$T/notes-branch" | head -20)"
 import json, re, sys
 m, b, tq, lp = open(sys.argv[1]).read(), open(sys.argv[2]).read(), sys.argv[3], sys.argv[4]
+cov = " It covers tasks whose subject starts with: eq scope."  # 0.7.0's proposal note names the covers list; main's has none
+b = b.replace(cov, "") if b.count(cov) == 1 else "no covers sentence"
 as_branch = lambda t: re.sub(r"agent-board(?=: | hold | skill )", "switchboard", t)  # main's prefix as this copy's
 unprefixed = lambda t: re.sub(r"switchboard(?=: | hold | skill )", "", t)
 texts = [json.loads(x) for x in b.split("\n") if x.strip()]
@@ -331,10 +333,10 @@ done && [ "$(cat "$T/foreign-file/.local/bin/switchboard")" = mine ] && HOME="$T
   && ok "a file, another link or a dangling link at ~/.local/bin/switchboard is left as it is, and paths says whose it is" || die "foreign"
 
 # ---- 9. words written into records say switchboard; old records keep theirs
-LX=$("$B" link --from "$T/alpha:lead" --to "$T/beta:worker" --scope "short" --until 1h | awk 'NR==1{print $2}')
+LX=$("$B" link --from "$T/alpha:lead" --to "$T/beta:worker" --scope "short" --covers "short" --until 1h | awk 'NR==1{print $2}')
 SWITCHBOARD_NOW=$(( $(date +%s) + 7200 )) up "$T/alpha" S1 "next" >/dev/null   # a prompt publishes, and the publish reaps
 [ "$(jq -r .closed_by "$SWITCHBOARD_DIR/links/$LX.json")" = switchboard ] && ok "a link the board closes says closed_by switchboard" || die "closed_by: $(cat "$SWITCHBOARD_DIR/links/$LX.json")"
-(cd "$T/beta" && SWITCHBOARD_SESSION_ID=S2 SWITCHBOARD_TEST_PROPOSE=1 "$B" link --from "$T/beta:other" --to "$T/alpha:lead" --scope x >/dev/null 2>&1) && die "proposal from an end not held"
+(cd "$T/beta" && SWITCHBOARD_SESSION_ID=S2 SWITCHBOARD_TEST_PROPOSE=1 "$B" link --from "$T/beta:other" --to "$T/alpha:lead" --scope x --covers "test work" >/dev/null 2>&1) && die "proposal from an end not held"
 refusal S2 | jq -r .tool | has -x switchboard && ok "a refusal the CLI records names its tool switchboard" || die "refusal: $(refusal S2)"
 
 # ---- 10. SWITCHBOARD_ switches: OFF, SESSIONS_DIR, NOSYNC

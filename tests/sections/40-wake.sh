@@ -59,7 +59,7 @@ p=$(prompt W "$T/alpha" sW); ! echo "$p" | has "$TK" && "$B" task "$TK" | has "n
 
 # ---- a proposal for the end it holds wakes it; so does its acceptance, at the proposer
 arm W "$W" "$T/alpha" sW w2
-under R "$T/beta" "\"$B\" link --from $T/beta:planner --to $T/alpha:builder --scope 'wake checks'" </dev/null >"$T/prop" 2>/dev/null
+under R "$T/beta" "\"$B\" link --from $T/beta:planner --to $T/alpha:builder --scope 'wake checks' --covers 'wake checks'" </dev/null >"$T/prop" 2>/dev/null
 LID=$(awk 'NR==1{print $2}' "$T/prop")
 has "alpha:builder held by .*: switchboard's listener wakes it within seconds when it is idle on this machine .*message it at that to= address" < "$T/prop" \
   && ok "link tells the proposer the listener wakes the other end, and to message it if it does not answer" || die "proposal text: $(cat "$T/prop")"

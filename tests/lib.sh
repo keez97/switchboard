@@ -132,7 +132,7 @@ fx_link1(){ # alpha, beta, gamma; S1 holds alpha:roadmap, S2 beta:implementer, S
   for s in "S1 alpha" "S2 beta" "S3 gamma"; do set -- $s; hook SessionStart "$T/$2" $1 >/dev/null; done
   SWITCHBOARD_SESSION_ID=S1 "$B" role roadmap >/dev/null; SWITCHBOARD_SESSION_ID=S2 "$B" role implementer >/dev/null
   SWITCHBOARD_SESSION_ID=S3 "$B" role implementer >/dev/null
-  LID=$(SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "order the next work items" --cap 2 | awk 'NR==1{print $2}')
+  LID=$(SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "order the next work items" --covers "order the next work items" --cap 2 | awk 'NR==1{print $2}')
   [ -n "$LID" ] || die "setup: link alpha:roadmap -> beta:implementer"; }
 fx_delta(){ # delta; S5 ("planner") in delta, not yet holding a role
   fx_repos delta
@@ -141,7 +141,7 @@ fx_delta(){ # delta; S5 ("planner") in delta, not yet holding a role
 fx_delta_eps(){ # delta and eps; S5 holds delta:lead and S6 ("worker") eps:builder through link L2 ("bind test", cap 9)
   fx_delta; fx_repos eps; P6=$(fake S6 "$T/eps" worker); hook SessionStart "$T/eps" S6 >/dev/null
   # shellcheck disable=SC2034  # L2 is for the sections that call this fixture
-  L2=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/eps:builder" --scope "bind test" --cap 9 | awk 'NR==1{print $2}')
+  L2=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/eps:builder" --scope "bind test" --covers "bind test" --cap 9 | awk 'NR==1{print $2}')
   "$B" who --role builder | has "sock.$P6" || die "setup: eps:builder not bound to S6"; }
 fx_holder(){ # sid: a second session in eps that takes eps:builder from S6
   seat "$1" "$T/eps" "eps holder $1"; hook SessionStart "$T/eps" "$1" >/dev/null
