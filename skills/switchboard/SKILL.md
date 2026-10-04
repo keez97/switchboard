@@ -94,6 +94,7 @@ A task lives at its worker's address. The requester writes the request and may a
 ```
 switchboard task request --to <repo>:<role> --subject "<one line>" --key <key> [--body "..." | --body-file f] [--kind k] [--link <id>] [--watch <repo>:<role>] [--parent <tid>]
 switchboard task <tid> [--json]      read one task (marks it seen when you hold its address)
+switchboard task <tid> --wait [--until <state>] [--timeout <seconds>]    block until the task ends, or reaches <state>
 switchboard task seen <tid>
 switchboard task working <tid> [--note "..."]
 switchboard task input-required <tid> [--waiting-on <who>] [--note "..."]    waits on the owner when no --waiting-on
@@ -104,6 +105,8 @@ switchboard task cancel <tid> [--note "..."]     requester only; the worker's an
 switchboard tasks --mine | --for <repo>:<role> | --subject <s> | --stale [hours]
 switchboard tasks --for <repo>:<role> --open [--unseen] [--json]
 ```
+To hear back on a task you requested, run `switchboard task <tid> --wait`. It prints the task when the task ends and exits 1 with a one-line message if it is still open after 90 seconds (`--timeout 0` waits with no limit). For a wait longer than about a minute, run it in the background and carry on. Do not poll with your own loop.
+
 An idle session holding the worker address on this machine is woken for a request within seconds by switchboard's listener (about a minute from another machine); if it has not answered within a few minutes, message it at the `to=` address `switchboard who` prints. The same key twice is a no-op; a deliberate rerun uses a new key. A request made while holding no role is information only. With `--link`, a request the link does not cover (scope does not name the subject, link expired or revoked, or the link's ends are not you and the worker) is refused with nothing written; fix the subject or the link and send it again. File a status report as `--kind report`: it completes with the note "report read" when its worker reads it, so it never sits open. To close many tasks at once, name them after the state; a refused one is printed on stderr and the others still close (`--artifact` takes one task). Bodies are capped at 8 KB and refused when they match a secret pattern: put detail in a repo file and name it. An artifact ref is checked against the commit when that repo is local.
 
 ## Authority
