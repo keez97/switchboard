@@ -48,7 +48,11 @@ up "$T/beta" S2 "$(peer "$T/sock.$P1" road "next: build X")" | ctx | has "no lin
 # a proposal stores until = its creation, so code older than proposals reads it as expired; the state alone must hold too
 jq ".until = $((NOW + 3600))" "$SWITCHBOARD_DIR/links/$LP.json" > "$T/lp" && mv "$T/lp" "$SWITCHBOARD_DIR/links/$LP.json"
 up "$T/beta" S2 "$(peer "$T/sock.$P1" road "next: build Z")" | ctx | has "no link covers this sender" && ok "a proposal with an end date ahead still carries no authority" || die "state alone did not hold"
-SWITCHBOARD_SESSION_ID=S1 "$B" task request --to "$T/beta:implementer" --subject "order the next work items" --key k1 --link "$LP" --no-sign >/dev/null
+# a request over a proposal is refused now; one written before that (or by an older board) is made here by activating the link for the write
+setstate(){ jq --arg s "$1" '.state = $s' "$SWITCHBOARD_DIR/links/$LP.json" > "$T/lp" && mv "$T/lp" "$SWITCHBOARD_DIR/links/$LP.json"; }
+out=$(SWITCHBOARD_SESSION_ID=S1 "$B" task request --to "$T/beta:implementer" --subject "order the next work items" --key k0 --link "$LP" --no-sign 2>&1) || true; echo "$out" | has -x "switchboard: link $LP does not cover this request: it is expired, revoked or a proposal not yet accepted. Nothing was written." \
+  && ok "a request over a proposed link is refused at request time" || die "request over a proposal was not refused: $out"
+setstate active; SWITCHBOARD_SESSION_ID=S1 "$B" task request --to "$T/beta:implementer" --subject "order the next work items" --key k1 --link "$LP" --no-sign >/dev/null; setstate proposed
 ptu "$T/beta" S2 | has "Link $LP does not cover this request (link proposed, not accepted)" && ok "a task over a proposed link is information the worker may decline" || die "task over proposal: $(ptu "$T/beta" S2)"
 
 # ---- only the other end accepts

@@ -4702,6 +4702,19 @@ def age(ts):
     return "%dm" % (s // 60) if s < 3600 else "%dh" % (s // 3600) if s < 86400 else "%dd" % (s // 86400)
 
 
+def end_pair(e):
+    """The (repo, role) a link end or a request's requester or worker is compared by; a broken end matches nothing."""
+    return (e.get("repo"), e.get("role")) if isinstance(e, dict) else (object(),)
+
+
+def scope_covers(scope, subject):
+    """True when the scope names the subject literally: the subject, its first token before "@" or ":", or an id in
+    it (SCOPE_IDS). link_check judges a request with this at read time and task_request refuses with it at write time."""
+    names = [subject, re.split(r"[@:]", subject, maxsplit=1)[0]] + [m.group(0) for p in SCOPE_IDS
+                                                                    for m in re.finditer(p, subject)]
+    return any(n and n.lower() in scope.lower() for n in names)
+
+
 def link_check(req, reader=None, d=None, timeout=20):
     """None when the request names no link, else the link judged now against the request: {id, verdict, scope,
     active, from_is_requester, to_is_worker, scope_covers_subject}. verdict is "ok" or the first failing reason.
@@ -4721,16 +4734,12 @@ def link_check(req, reader=None, d=None, timeout=20):
     if not isinstance(l, dict):
         return {"id": lid, "verdict": "no such link", "scope": "", "active": False, "from_is_requester": False,
                 "to_is_worker": False, "scope_covers_subject": False}
-    pair = lambda e: (e.get("repo"), e.get("role")) if isinstance(e, dict) else (object(),)  # a broken end matches nothing
-    subject, scope = str(req.get("subject") or ""), str(l.get("scope") or "")
-    # covers: the subject, its first token before "@" or ":", or an id in it (SCOPE_IDS), named literally in the scope
-    names = [subject, re.split(r"[@:]", subject, maxsplit=1)[0]] + [m.group(0) for p in SCOPE_IDS
-                                                                    for m in re.finditer(p, subject)]
+    scope = str(l.get("scope") or "")
     out = {"id": lid, "scope": scope,
            "active": is_active(l),
-           "from_is_requester": pair(l.get("from")) == pair(req.get("requester")),
-           "to_is_worker": pair(l.get("to")) == pair(req.get("worker")),
-           "scope_covers_subject": any(n and n.lower() in scope.lower() for n in names)}
+           "from_is_requester": end_pair(l.get("from")) == end_pair(req.get("requester")),
+           "to_is_worker": end_pair(l.get("to")) == end_pair(req.get("worker")),
+           "scope_covers_subject": scope_covers(scope, str(req.get("subject") or ""))}
     ends = [e if isinstance(e, dict) else {} for e in (l.get("from"), l.get("to"))]
     by, at = agent_seat(l, ends[0]), agent_seat(l, ends[1])
     rs, old = req.get("seat"), "seat" not in req  # old: written before seats, judged by role
@@ -4930,7 +4939,7 @@ def task_request(a):
     if a.parent and not re.fullmatch(r"t[0-9a-f]{8}", a.parent):
         sys.exit("switchboard: --parent must be a task id like t0123abcd. Nothing was written.")
     if a.link and (not re.fullmatch(r"l[0-9a-f]+", a.link) or not (BOARD / "links" / (a.link + ".json")).exists()):
-        sys.exit("switchboard: no link %s. Nothing was written." % a.link)  # the rest is judged at read time
+        sys.exit("switchboard: no link %s. Nothing was written." % a.link)  # signatures and seats are judged at read time
     watchers = [task_end(w, reg) for w in a.watch]
     # the requester is the caller's repo and the role it holds there; holding none makes the request information only
     d = own_session() or {}
@@ -4942,6 +4951,23 @@ def task_request(a):
         if role:
             acting_as(rid, role, d)
     requester = {"repo": rid, "role": role}
+    if a.link:  # a sender learns now what the worker would read later; link_check judges the same facts again at read time
+        l = load(BOARD / "links" / (a.link + ".json"), None)
+        l = l if isinstance(l, dict) else {}
+        ends = [e if isinstance(e, dict) else {} for e in (l.get("from"), l.get("to"))]
+        scope = str(l.get("scope") or "")
+        if not is_active(l):
+            why = "it is expired, revoked or a proposal not yet accepted"
+        elif (end_pair(l.get("from")), end_pair(l.get("to"))) != (end_pair(requester), end_pair(worker)):
+            why = "it runs from %s to %s, and this request is from %s to %s" % (
+                end_str(ends[0]), end_str(ends[1]), end_str(requester), end_str(worker))
+        elif not scope_covers(scope, subject):
+            why = ("its scope %r does not name the subject (the subject, its part before ':' or '@', or an id in it must "
+                   "appear in the scope)" % scope)
+        else:
+            why = ""
+        if why:
+            sys.exit("switchboard: link %s does not cover this request: %s. Nothing was written." % (a.link, why))
     tid = "t" + hashlib.sha256(("%s:%s" % (rname(worker["repo"]), worker["role"]) + key).encode()).hexdigest()[:8]
     home = BOARD / "tasks" / ("%s--%s" % (slug(rname(worker["repo"])), slug(worker["role"]))) / tid
     f = home / "000-request.json"
