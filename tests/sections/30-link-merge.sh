@@ -285,6 +285,8 @@ ok(same(LA) and x.get("revoked") == m["revoked"] and "proposal expired" in x.get
    x.get("accepted") == a["accepted"] and (x.get("accepted_by") or dict()).get("session") == "S2" and not listed,
    "both clones end with one link: closed by the expiry, the acceptance kept, active on neither (passes on main too)",
    "%s vs %s %s" % (read(clone("east") + "/links/%s.json" % LA), read(clone("west") + "/links/%s.json" % LA), listed))
+ok((x.get("accepted_by") or dict()).get("covers") == ["merge test"] == a["accepted_by"].get("covers"),
+   "the merge keeps the covers list stamped on the acceptance", str(x.get("accepted_by")))
 
 # unlink and a cap change on east, a cap change on west; synced by board sync, so its pull with autostash merges them
 pair("cap")

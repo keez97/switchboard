@@ -168,6 +168,8 @@ out=$("$B" init --update --machine elm)
   || die "reuse: $(ls -li "$S"); $out"
 [ "$(pj 'd["state"]' "$D/links/$LA.json")" = active ] && [ "$(pj 'd["accepted_by"]["machine"]' "$D/links/$LB.json")" = elm ] \
   || die "setup: links after the rename: $(cat "$D/links/$LA.json")"
+[ "$(jq -c .accepted_by.covers "$D/links/$LB.json")" = '["fix"]' ] && ok "the rename keeps the covers list stamped on the acceptance" \
+  || die "stamp after the rename: $(cat "$D/links/$LB.json")"
 n=$(note P2 "$R1")
 [ "$(jv "$R1")" = "requester is not the session that agreed to the link" ] && echo "$n" | info "requester is not the session that agreed to the link" \
   && [ "$(wk "$R5" P5)" = False ] \

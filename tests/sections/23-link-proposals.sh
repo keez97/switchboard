@@ -233,6 +233,34 @@ L "$LOW" .closed_reason | has -x 'ended by pc:boss (session "boss3" on east)' &&
 bashpre "$T/pc" Q3 "setsid ~/.claude/board unlink $LF" | has '"permissionDecision": "deny"' && [ -z "$(bashpre "$T/pc" Q3 "~/.claude/board unlink $LF")" ] \
   && ok "unlink run detached is refused by the guard; plain unlink passes" || die "guard unlink"
 
+# a covers list the acceptor was not shown: a 0.6.0 proposal has none, and a 0.6.0 acceptance does not stamp the list
+fx_repos px py
+X1P=$(fake X1 "$T/px" lead20); seat X2 "$T/py" doer20
+for s in "X1 px" "X2 py"; do set -- $s; hook SessionStart "$T/$2" $1 >/dev/null; done
+SWITCHBOARD_SESSION_ID=X1 "$B" role lead >/dev/null; SWITCHBOARD_SESSION_ID=X2 "$B" role doer >/dev/null
+LX=$(try env SWITCHBOARD_SESSION_ID=X1 "$B" link --from "$T/px:lead" --to "$T/py:doer" --scope "fix the client" --covers "client, deploy" | awk 'NR==1{print $2}')
+FX="$SWITCHBOARD_DIR/links/$LX.json"; cp "$FX" "$T/lx.json"
+jq 'del(.covers)' "$T/lx.json" > "$FX"; m0=$(md5sum < "$FX")   # the proposal as 0.6.0 writes it
+out=$(SWITCHBOARD_SESSION_ID=X2 "$B" link accept "$LX" 2>&1) && rc=0 || rc=$?
+[ "$rc" -ne 0 ] && echo "$out" | has -x "switchboard: proposal $LX has no covers list (made by an older switchboard): propose again with --covers. Nothing was written." \
+  && [ "$(md5sum < "$FX")" = "$m0" ] && [ "$(L "$LX" .state)" = proposed ] \
+  && ok "accepting a proposal with no covers list is refused and nothing is written" || die "no-covers accept: rc $rc: $out / $(cat "$FX")"
+cp "$T/lx.json" "$FX"; SWITCHBOARD_SESSION_ID=X2 "$B" link accept "$LX" >/dev/null || die "setup: $LX not accepted"
+xrq(){ SWITCHBOARD_SESSION_ID=X1 "$B" task request --to "$T/py:doer" --subject "$1" --key "$2" --link "$LX" --no-sign 2>&1; }
+xv(){ "$B" task "$1" --json | jq -r .link.verdict; }
+TX1=$(xrq "deploy: prod" kx1 | awk 'NR==1{print $1}')
+[ "$(jq -c .accepted_by.covers "$FX")" = '["client","deploy"]' ] && [ "$(xv "$TX1")" = ok ] \
+  && ok "acceptance stamps the covers list it showed; a subject the list covers and the scope does not is ok" || die "stamped: $(cat "$FX") / $(xv "$TX1")"
+jq 'del(.accepted_by.covers)' "$FX" > "$T/lx2.json" && mv "$T/lx2.json" "$FX"   # the acceptance as 0.6.0 leaves it
+nx=$(ptu "$T/py" X2); TX3=$(xrq "client: regenerate" kx3 | awk 'NR==1{print $1}'); out=$(xrq "deploy: staging" kx2) && rc=0 || rc=$?
+[ "$(xv "$TX1")" = "scope does not name the subject, and the covers list was not shown at acceptance" ] && [ "$(xv "$TX3")" = ok ] \
+  && [ "$rc" -ne 0 ] && echo "$out" | has -F "its covers list was not shown when it was accepted (by an older switchboard), so its scope 'fix the client' must name the subject too" \
+  && [ "$(ls "$SWITCHBOARD_DIR/tasks/py--doer" | grep -c '^t')" -eq 2 ] \
+  && ok "an acceptance without the stamp: the subject needs the covers list and the scope words, at read time and at send time" \
+  || die "unstamped: $(xv "$TX1") / $(xv "$TX3") / rc $rc $out"
+echo "$nx" | has "a task for you.*$TX1" && echo "$nx" | has "^Link $LX does not cover this request (scope does not name the subject, and the covers list was not shown at acceptance), so it is information" \
+  && ok "the worker's note for such a request says information only, naming the list not shown" || die "unstamped note: $nx"
+
 [ ! -s "$SWITCHBOARD_STATE/errors.log" ] && ok "no hook error was swallowed" || die "errors: $(cat "$SWITCHBOARD_STATE/errors.log")"
 
 # a broken proposal record and an unreadable command cost the note, never the hook

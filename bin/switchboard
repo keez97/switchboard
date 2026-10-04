@@ -5085,22 +5085,47 @@ def covers_of(l):
     return [e.strip() for e in c if e.strip()] if isinstance(c, list) and all(isinstance(e, str) for e in c) else []
 
 
-def link_covers(l, subject):
-    """True when link l covers a request with this subject. Names: the subject, its part before ":" or "@", and the
-    ids in it (SCOPE_IDS), each trimmed. With a covers list: the subject equals an entry or starts with one followed
-    by ":" or "@", or an id in it equals an entry; case-insensitive. Without one (COVERS_NONE): a name appears in the
-    scope as whole words, never inside a longer word (letters, digits, "-" and "_" are word characters).
-    link_check judges a request with this at read time and task_request refuses with it at write time."""
+def covers_shown(l):
+    """False for a link two sessions made that has a covers list its acceptance does not carry: link_answer stamps
+    accepted_by with the list the acceptor was shown, and an acceptor on 0.6.0 saw only the scope (or the list was
+    changed since). True for any other link: an owner link's list is the owner's own."""
+    if not isinstance(l.get("proposed_by"), dict) or covers_of(l) == COVERS_NONE:
+        return True
+    acc = l.get("accepted_by")
+    return isinstance(acc, dict) and "covers" in acc and _text(acc["covers"]) == _text(l.get("covers"))
+
+
+def covers_hit(l, subject):
+    """For a link with a covers list: True when the subject equals an entry or starts with one followed by ":" or
+    "@", or an id in it (SCOPE_IDS) equals an entry; case-insensitive. None for a link with none (COVERS_NONE)."""
+    cov = covers_of(l)
+    if cov == COVERS_NONE:
+        return None
     subject = subject.strip()
     ids = [m.group(0).strip() for p in SCOPE_IDS for m in re.finditer(p, subject)]
-    cov = covers_of(l)
-    if cov != COVERS_NONE:
-        s, es = subject.lower(), [e.lower() for e in cov]
-        return any(s == e or s.startswith(e + ":") or s.startswith(e + "@") for e in es) or \
-            any(i.lower() in es for i in ids)
+    s, es = subject.lower(), [e.lower() for e in cov]
+    return any(s == e or s.startswith(e + ":") or s.startswith(e + "@") for e in es) or any(i.lower() in es for i in ids)
+
+
+def scope_hit(l, subject):
+    """True when a name of the subject (itself, its part before ":" or "@", and the ids in it, each trimmed) appears
+    in link l's scope as whole words, never inside a longer word (letters, digits, "-" and "_" are word characters)."""
+    subject = subject.strip()
+    ids = [m.group(0).strip() for p in SCOPE_IDS for m in re.finditer(p, subject)]
     scope = str(l.get("scope") or "")
     names = [subject, re.split(r"[@:]", subject, maxsplit=1)[0].strip()] + ids
     return any(n and re.search(r"(?<![\w-])%s(?![\w-])" % re.escape(n), scope, re.I) for n in names)
+
+
+def link_covers(l, subject):
+    """True when link l covers a request with this subject: by its covers list (covers_hit) when it has one, else by
+    its scope words (scope_hit). A link two sessions made whose acceptor was not shown the list (covers_shown) needs
+    both: that acceptor agreed to the scope only.
+    link_check judges a request with this at read time and task_request refuses with it at write time."""
+    hit = covers_hit(l, subject)
+    if hit is None:
+        return scope_hit(l, subject)
+    return hit and (covers_shown(l) or scope_hit(l, subject))
 
 
 def covers_arg(raw):
@@ -5134,10 +5159,12 @@ def link_check(req, reader=None, d=None, timeout=20):
     """None when the request names no link, else the link judged now against the request: {id, verdict, scope,
     covers, active, from_is_requester, to_is_worker, scope_covers_subject}. verdict is "ok" or the first failing
     reason. covers is the link's covers list, or COVERS_NONE for a link with none, judged by its scope words, and
-    scope_covers_subject is link_covers either way.
+    scope_covers_subject is link_covers either way (a link two sessions made whose acceptor was not shown its list,
+    covers_shown, needs its scope words too).
     A link two sessions made gives authority to the two seats that agreed to it, never to the next holder of an end:
     the request's seat must be the one at `from` (a request with no seat fails: seats and links two sessions make
-    came in the same release), and name the machine the request names, so a machine that signs as itself cannot borrow a seat from the link record;
+    came in the same release), and name the machine the request names, so a machine that signs as itself cannot
+    borrow a seat from the link record;
     reader, the presence record of a session reading the task as its worker, the one at `to`. Seats compare by
     same_seat: a machine renamed since, under a name keys/allowed_signers gives the same key, is the same machine.
     A seat that is not a record, or a reader task_reader could not determine (READER_UNKNOWN), fails an agent link
@@ -5178,7 +5205,9 @@ def link_check(req, reader=None, d=None, timeout=20):
                       "this session is not the one that agreed to the link"
                       if at and isinstance(reader, dict) and not same_seat(seat(reader), at) else
                       ("scope does not name the subject" if out["covers"] == COVERS_NONE else
-                       "covers list does not name the subject") if not out["scope_covers_subject"] else "ok")
+                       "covers list does not name the subject" if not covers_hit(l, str(req.get("subject") or "")) else
+                       "scope does not name the subject, and the covers list was not shown at acceptance")
+                      if not out["scope_covers_subject"] else "ok")
     other = req.get("machine") != MACHINE
     if out["verdict"] == "ok" and (other or signs_own()):  # a request this machine did not write must be signed
         st = sig_cached(d, req, timeout) if d else "signed, not verified: no task folder"
@@ -5455,7 +5484,10 @@ def task_request(a):
         elif not link_covers(l, subject):
             why = ("its covers list does not name the subject. link %s covers: %s; the subject must start with one of "
                    "them, followed by ':' or '@' (\"<prefix>: ...\"), or be one" % (a.link, covers_str(l))
-                   if covers_of(l) != COVERS_NONE else
+                   if covers_hit(l, subject) is False else
+                   "its covers list was not shown when it was accepted (by an older switchboard), so its scope %r must "
+                   "name the subject too, and does not. Make a new link to use the list alone" % scope
+                   if covers_hit(l, subject) else
                    "it has no covers list, so its scope words are used, and its scope %r does not name the subject (the "
                    "subject, its part before ':' or '@', or an id in it must appear in the scope as whole words)" % scope)
         else:
@@ -6248,6 +6280,9 @@ def link_answer(a):
     if l.get("expires", 0) <= now():
         sys.exit("switchboard: proposal %s expired unanswered at %s. Nothing was written; its proposer may propose again."
                  % (a.lid, iso(l["expires"])))
+    if a.what == "accept" and covers_of(l) == COVERS_NONE:
+        sys.exit("switchboard: proposal %s has no covers list (made by an older switchboard): propose again with "
+                 "--covers. Nothing was written." % a.lid)
     other, p, accept = other_end(l), l.get("proposed_by") or {}, a.what == "accept"
     addr = "%s:%s" % (rname(other["repo"]), other["role"])
     pe = {"repo": p.get("repo"), "role": p.get("role")}
@@ -6294,8 +6329,9 @@ def link_answer(a):
     else:
         if taking:
             bind(rec, other["role"], "it accepted link %s" % a.lid)
+        # the list this session was shown: covers_shown reads an acceptance without it as one that saw the scope only
         l.update({"state": "active", "accepted": now(), "until": now() + int(l.get("span") or AGENT_LINK_HOURS * 3600),
-                  "accepted_by": who})
+                  "accepted_by": dict(who, covers=l.get("covers"))})
         save(BOARD / "links" / (a.lid + ".json"), l)
         write_event("link", "link:" + a.lid, "link %s accepted by %s: %s within: %s, until %s, %s. Proposed by "
                     "%s. Made by two sessions within the agent limits; extending it or raising its cap is %s's" % (
