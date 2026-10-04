@@ -39,23 +39,24 @@ grep -qx "this session now holds role worker in alpha" "$T/none.out" && ! grep -
 # plugins reloaded mid-life: SessionStart does not fire again, the next tool call's PostToolUse records the process
 printf '{"hook_event_name": "PostToolUse", "cwd": "%s", "session_id": "sA", "tool_name": "Read", "tool_input": {}, "tool_use_id": "u1"}' "$T/alpha" \
   | python3 "$FC" run "$T/fc-A.sock" "$T/alpha" "\"$B\" hook" >/dev/null
-[ -f "$REC" ] && ok "a PostToolUse hook records the session's process" || die "no record after PostToolUse"
+PIDA="$SWITCHBOARD_STATE/claude/pid-$A.json"
+[ -f "$REC" ] && [ -f "$PIDA" ] && ok "a PostToolUse hook records the session's process and marks the process it runs in" || die "no record after PostToolUse"
 runs A hooked
 [ ! -s "$T/hooked.err" ] && ok "with the record: no warning from role, who or status" || die "warned with hooks: $(cat "$T/hooked.err")"
-mv "$REC" "$T/rec.json"
+mv "$PIDA" "$T/pidA.json"
 runs A bare
-mv "$T/rec.json" "$REC"
-[ "$(grep -c "$WARN" "$T/bare.err")" = 3 ] && ok "the record moved away: the warning is back" || die "no warning: $(cat "$T/bare.err")"
+mv "$T/pidA.json" "$PIDA"
+[ "$(grep -c "$WARN" "$T/bare.err")" = 3 ] && ok "the process's mark moved away: the warning is back" || die "no warning: $(cat "$T/bare.err")"
 cmp -s "$T/hooked.out" "$T/bare.out" && ok "stdout of role, who and status is byte-identical with and without the warning" || die "stdout differs: $(diff "$T/hooked.out" "$T/bare.out")"
-mv "$REC" "$T/rec.json"
+mv "$PIDA" "$T/pidA.json"
 ! SWITCHBOARD_NOWALK=1 python3 "$FC" run "$T/fc-A.sock" "$T/alpha" "\"$B\" who" 2>&1 >/dev/null </dev/null | has "without switchboard" \
   && ok "NOWALK: no warning" || die "warned with NOWALK"
 ! SWITCHBOARD_OFF=1 python3 "$FC" run "$T/fc-A.sock" "$T/alpha" "\"$B\" status" 2>&1 >/dev/null </dev/null | has "without switchboard" \
   && ok "switchboard switched off: no warning" || die "warned with OFF"
-# the app reopens a session in a new process with the same session id: a record naming the earlier process is stale
-python3 -c "import json,sys; r=json.load(open(sys.argv[1])); r['pid']=int(sys.argv[2]); json.dump(r,open(sys.argv[3],'w'))" "$T/rec.json" $$ "$REC"
-under A "\"$B\" who" 2>&1 >/dev/null | has "$WARN" && ok "a record for the same session id naming another process: the warning shows" || die "stale record hid the warning"
-mv "$T/rec.json" "$REC"
+# the pid now runs another process (the hooks ran in an earlier process with that pid): its mark says nothing of this one
+python3 -c "import json,sys; r=json.load(open(sys.argv[1])); r['procStart']='1'; json.dump(r,open(sys.argv[2],'w'))" "$T/pidA.json" "$PIDA"
+under A "\"$B\" who" 2>&1 >/dev/null | has "$WARN" && ok "a mark for this pid with another procStart: the warning shows" || die "stale mark hid the warning"
+mv "$T/pidA.json" "$PIDA"
 
 # the same session id reopened in a new process (the desktop app reopens a session, claude --resume): the record names
 # the earlier process until a hook in the new one rewrites it, on any event, not only on session start
@@ -70,9 +71,21 @@ seq=""; want=""
 for e in SessionStart PostToolUse UserPromptSubmit PostToolUse Stop; do
   ev E2 "$e"; seq="$seq $(pid_of)"; ev E "$e"; seq="$seq $(pid_of)"; want="$want $E $E"; done
 [ "$seq" = "$want" ] && ok "two live processes on one session id, hooks alternating between them: the record keeps naming the first" || die "record pids:$seq, want$want"
+# both run hooks, the record names E: neither warns, whichever wrote the session's record
+ev E2 PostToolUse
+bad=""; for n in E E2; do out=$(under $n "\"$B\" who" 2>&1 >/dev/null); [ -z "$out" ] || bad="$bad $n"; done
+[ -z "$bad" ] && ok "two live processes on one session id, both with hooks: who under either prints no warning" \
+  || die "two live processes with hooks, who warned under:$bad"
+# a third process of the same session id whose hooks never ran: it alone warns
+E3=$(claude E3 sE)
+bad=""; under E3 "\"$B\" who" 2>&1 >/dev/null | has "$WARN" || bad=" E3 silent"
+for n in E E2; do out=$(under $n "\"$B\" who" 2>&1 >/dev/null); [ -z "$out" ] || bad="$bad $n warned"; done
+[ -z "$bad" ] && ok "a process of the same session id whose hooks never ran warns; the two whose hooks ran do not" \
+  || die "a hookless process next to two with hooks:$bad"
+python3 "$FC" quit "$T/fc-E3.sock"; rm -f "$HOME/.claude/sessions/$E3.json"
 # walk only (no session files): a CLI call under E finds E's own process, not the other one's
 mkdir -p "$T/sess"; mv "$HOME/.claude/sessions/$E.json" "$HOME/.claude/sessions/$E2.json" "$T/sess/"
-rm "$SWITCHBOARD_STATE/claude/sE.json"; ev E PostToolUse
+rm "$SWITCHBOARD_STATE/claude/sE.json"; rm -f "$SWITCHBOARD_STATE/claude/pid-$E2.json"; ev E PostToolUse
 for e in PostToolUse UserPromptSubmit PostToolUse; do ev E2 "$e"; ev E "$e"; done; ev E2 PostToolUse
 own=$(under E "python3 -c \"
 import importlib.machinery, importlib.util
@@ -80,6 +93,14 @@ l = importlib.machinery.SourceFileLoader('sb', '$B'); m = importlib.util.module_
 print(m.own_session()['pid'])\"")
 [ "$(pid_of)" = "$E" ] && [ "$own" = "$E" ] && ok "walk only, hooks alternating: the record stays on the first process and own_session under it returns its pid" \
   || die "walk only: record pid $(pid_of), own_session under E $own, want $E"
+own=$(under E2 "python3 -c \"
+import importlib.machinery, importlib.util
+l = importlib.machinery.SourceFileLoader('sb', '$B'); m = importlib.util.module_from_spec(importlib.util.spec_from_loader('sb', l)); l.exec_module(m)
+d = m.own_session() or {}; print(d.get('pid'), d.get('sessionId'), d.get('procStart') == m.proc_start($E2))\"")
+[ "$own" = "$E2 sE True" ] && ok "walk only, the record on the first process: own_session under the second returns its own pid and procStart and the session id" \
+  || die "walk only: own_session under E2 gave '$own', want '$E2 sE True'"
+out=$(under E2 "\"$B\" who" 2>&1 >/dev/null)
+[ -z "$out" ] && ok "walk only: who under the second process prints no warning" || die "walk only, who under E2 warned: $out"
 # a record a walk made, the session files back: a prompt in the other live process leaves it as it is
 mv "$T/sess/$E.json" "$T/sess/$E2.json" "$HOME/.claude/sessions/"
 ev E2 UserPromptSubmit
