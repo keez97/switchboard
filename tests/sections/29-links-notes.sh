@@ -34,6 +34,23 @@ TA=$(rq SA k1)
   && ptu "$T/eps" SB | has "The link's scope makes this an instruction you act on" \
   && ok "the sessions that agreed: the request stores its seat, the verdict is ok through the id in the subject and the worker's note is an instruction" || die "agreed pair: $(verdict "$TA") $(RQ "$TA")"
 
+# a machine with a key the owner lists (west) writes a request in its own name and signs it: the seat that agreed is
+# in the link record for anyone to copy, so a seat naming another machine than the request's fails the link
+mkdir -p "$SWITCHBOARD_DIR/keys"; ssh-keygen -q -t ed25519 -N "" -f "$T/west" -C west
+echo "west namespaces=\"switchboard-task\" $(cat "$T/west.pub")" > "$SWITCHBOARD_DIR/keys/allowed_signers"
+aswest(){ # tid seat-machine: the request rewritten in west's name with its seat's machine set, then signed with west's key
+  python3 - "$SWITCHBOARD_DIR/tasks/eps--builder/$1/000-request.json" "$2" <<'PY'
+import json,sys; f,m=sys.argv[1:3]; r=json.load(open(f)); r["machine"]="west"; r["seat"]["machine"]=m
+open(f,"w").write(json.dumps(r, indent=1, sort_keys=True) + "\n")
+PY
+  ssh-keygen -Y sign -f "$T/west" -n switchboard-task < "$SWITCHBOARD_DIR/tasks/eps--builder/$1/000-request.json" \
+    > "$SWITCHBOARD_DIR/tasks/eps--builder/$1/000-request.sig" 2>/dev/null; }
+TW=$(rq SA kw1); aswest "$TW" east; TW2=$(rq SA kw2); aswest "$TW2" west
+[ "$("$B" task "$TW" --json | jq -r .signature)" = "signed by west" ] && [ "$(verdict "$TW")" = "the request's seat names another machine" ] \
+  && [ "$(verdict "$TW2")" = "requester is not the session that agreed to the link" ] && [ "$(verdict "$TA")" = ok ] \
+  && ok "a request signed by west that copies the agreeing seat fails as a seat of another machine; with west's own seat it is not the agreeing one" \
+  || die "copied seat: $(verdict "$TW") / $(verdict "$TW2") / $(verdict "$TA")"
+
 # a new holder of B's role reads a task before the close of the link reaches it
 SWITCHBOARD_SESSION_ID=SB2 "$B" role builder --take >/dev/null || die "setup: SB2 did not take eps:builder"; again
 TB=$(rq SA k2); out=$(ptu "$T/eps" SB2)

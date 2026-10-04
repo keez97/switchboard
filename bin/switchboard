@@ -4992,6 +4992,7 @@ def link_check(req, reader=None, d=None, timeout=20):
     active, from_is_requester, to_is_worker, scope_covers_subject}. verdict is "ok" or the first failing reason.
     A link two sessions made gives authority to the two seats that agreed to it, never to the next holder of an end:
     the request's seat must be the one at `from` (a request written before seats were stored is judged by role), and
+    name the machine the request names, so a machine that signs as itself cannot borrow a seat from the link record;
     reader, the presence record of a session reading the task as its worker, the one at `to`. A seat that is not a
     record, or a reader task_reader could not determine (READER_UNKNOWN), fails an agent link closed.
     A request from another machine (its machine is not MACHINE, or is missing) that would be ok is checked last: its
@@ -5019,6 +5020,8 @@ def link_check(req, reader=None, d=None, timeout=20):
                       "link revoked" if l.get("revoked") else
                       "link expired" if l.get("until") and l["until"] <= now() else
                       "from is not the requester" if not out["from_is_requester"] else
+                      "the request's seat names another machine"
+                      if by and isinstance(rs, dict) and rs.get("machine") != req.get("machine") else
                       "requester is not the session that agreed to the link"
                       if by and not old and (not isinstance(rs, dict) or seat(rs) != by) else
                       "to is not the worker" if not out["to_is_worker"] else
