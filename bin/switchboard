@@ -5240,6 +5240,8 @@ def link_check(req, reader=None, d=None, timeout=20):
     same_seat: a machine renamed since, under a name keys/allowed_signers gives the same key, is the same machine.
     A seat that is not a record, or a reader task_reader could not determine (READER_UNKNOWN), fails an agent link
     closed.
+    These seat checks hold against whoever writes a request. Link records are not signed, so a board writer who edits
+    one (removes proposed_by, rewrites a seat or the covers stamp) has the same power as in 0.6.0.
     A request from another machine (its machine is not MACHINE, or is missing) that would be ok is checked last: its
     signature in d, the task folder, must read "signed by", else the verdict is "unsigned request from another
     machine (<status>)". So must one that names this machine when this machine signs its own (signs_own): anyone who

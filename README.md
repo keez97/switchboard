@@ -170,7 +170,7 @@ A link two sessions make runs at most 24 hours from acceptance and closes when e
 
 `switchboard links` shows when each link ends on a second line and its covers list on the next. `switchboard links --json` prints the same links and proposals as JSON, with the sends so far today and the last activity.
 
-Every new link needs `--covers`: the task subjects it covers, as a comma-separated list of prefixes. Each entry is 3 to 80 characters with no `:` or `@` and no control or invisible characters, so an id that contains `:` or `@`, or is shorter than 3 characters, cannot be listed: give such a task a subject that starts with an entry. A task is covered when its subject is an entry, or starts with one followed by `:` or `@`. So word a subject as `<prefix>: what to do`. With `--covers "client, schema"`, the subjects `client: regenerate the SDK` and `schema@4f2a1c9` are covered, and `clients: x` and `Build: client` are not. The scope is for people to read. It decides nothing about tasks.
+Every new link needs `--covers`: the task subjects it covers, as a comma-separated list of prefixes. Each entry is 3 to 80 characters with no `:` or `@` and no control or invisible characters, so an id that contains `:` or `@`, or is shorter than 3 characters, cannot be listed: give such a task a subject that starts with an entry. A task is covered when its subject is an entry, or starts with one followed by `:` or `@`. So word a subject as `<prefix>: what to do`. With `--covers "client, schema"`, the subjects `client: regenerate the SDK` and `schema@4f2a1c9` are covered, and `clients: x` and `Build: client` are not. The scope is for people to read. It decides nothing about tasks, except on a link two sessions made that a session on 0.6.0 accepted: there the subject needs both the list and the whole words of the scope (see Upgrading to 0.7.0).
 
 A link made before 0.7.0 has no covers list. Its tasks are judged by the words of its scope: the subject, or its part before `:` or `@`, must appear there as whole words, so `Build` does not match inside `builder's`. `switchboard task` and the worker's note say when a link is judged this way. To give such a link a list, make a new one with `--covers`, then end the old one (see Upgrading to 0.7.0).
 
@@ -185,9 +185,9 @@ switchboard link --from api:backend --to web:frontend --scope "client generation
 switchboard unlink l5c2a1e
 ```
 
-Finish or request again the old link's open tasks before `unlink`: after it they read `link revoked` and count as information. Requests then name the new link's id.
+Finish or request again the old link's open tasks before `unlink`: after it they read `link revoked` and count as information. Requests then name the new link's id. A task requested again needs a new `--key`: with the same key, `task request` prints `<tid> already requested (same worker and key); nothing written` before it reads `--link`, so the task stays on the old link.
 
-A link two sessions made carries the covers list the accepting session was shown. A session on 0.6.0 accepts seeing only the scope, so the tasks of a link it accepted need both the list and the whole words of the scope. A session on 0.7.0 cannot accept a proposal made on 0.6.0, which has no list: its proposer proposes again with `--covers`.
+A link two sessions made carries the covers list the accepting session was shown. A session on 0.6.0 accepts seeing only the scope, so the tasks of a link it accepted need both the list and the whole words of the scope. A session on 0.7.0 cannot accept a proposal made on 0.6.0, which has no list. Its proposer updates to 0.7.0 first, since 0.6.0 has no `--covers`, then proposes again with it.
 
 Update every machine on the board the same day: until all of them run 0.7.0, a 0.6.0 machine judges a link by its scope and can reach a different verdict on the same task.
 
@@ -230,6 +230,7 @@ switchboard stops honest agent mistakes. It does not stop a determined process r
 - Some owner-only acts are rules in the notes, not checks. The CLI does not enforce who may release a hold.
 - The CLI tells a session from your terminal by its process tree, and a detached process looks like your terminal. A separate guard refuses link commands run detached.
 - Signatures decide what a request counts as. They don't stop anyone with push access to the board repo from writing records.
+- Link records are not signed. Someone with push access can edit who proposed or accepted a link, or the covers list stamped on it, and requests over it are then judged by the edited record.
 - A note arrives on a session's next prompt or tool call. An idle session is woken by a listener the Stop hook starts, within seconds on this machine and about a minute from another, only for a task, a link proposal or a task or link change that concerns it, and at most 12 times an hour.
 - Live delivery to a session reads Claude Code's undocumented session files, which can change with any release. Notes, holds, roles and tasks use documented hook input only.
 
