@@ -5099,6 +5099,27 @@ def delivery(tid, curs):
     return "; ".join(parts)
 
 
+def task_wait(a):
+    """switchboard task <tid> --wait: poll until the task is in the --until state, or in any final state without it, then
+    show it as a normal read does. Writes nothing and marks nothing seen while it polls. Exits 1 on timeout."""
+    tid = a.what
+    d = task_dir(tid)
+    if not d:
+        return task_show(tid)  # exits as a read of an unknown task does
+    signal.signal(signal.SIGTERM, lambda *_: os._exit(1))
+    want = (a.until,) if a.until else TERMINAL
+    limit, t0 = TASK_WAIT if a.timeout is None else a.timeout, time.monotonic()
+    while True:
+        st = task_state(task_records(d))
+        if st in want:
+            return task_show(tid, a.json)
+        left = limit - (time.monotonic() - t0)
+        if limit and left <= 0:
+            sys.exit("switchboard: task %s is still %s after %gs" % (tid, st, limit))
+        pull_due()  # a change another machine pushed arrives on a later pass
+        time.sleep(min(WAIT_POLL, left) if limit else WAIT_POLL)
+
+
 def mark_read(d):
     """board task <tid> run from a Claude session that holds the task's worker address is the worker reading the task:
     seen on this machine. Anyone else reading it (the requester, a script, another session in the repo) marks nothing.
@@ -6225,6 +6246,7 @@ def proposal_notes(rec, peek=False):
 # before, to re-arm. WAIT_TIMEOUT is the timeout hooks/hooks.json gives the waiter, kept equal to it (40-wake checks)
 WAIT_TIMEOUT, WAIT_MARGIN = 86400, 60
 WAIT_POLL = 2  # seconds between the waiter's looks at the board
+TASK_WAIT = 90  # task --wait gives up after this many seconds, under the 2 minutes a Bash call has by default
 WAKE_CAP = 12  # wakes per Claude process per hour; past that the waiter exits and the work waits for a prompt
 _WAKING = [False]  # set while the waiter marks notes shown and writes them: a SIGTERM then must not lose them
 
@@ -6669,6 +6691,8 @@ def main():
     g = p.add_mutually_exclusive_group(); g.add_argument("--body"); g.add_argument("--body-file")
     p.add_argument("--watch", action="append", default=[]); p.add_argument("--parent", default="")
     p.add_argument("--no-sign", action="store_true"); p.add_argument("--json", action="store_true"); p.add_argument("--link")
+    p.add_argument("--wait", action="store_true"); p.add_argument("--until", choices=STATES)
+    p.add_argument("--timeout", type=float, metavar="SECONDS")
     p = sub.add_parser("tasks"); g = p.add_mutually_exclusive_group()
     g.add_argument("--for", dest="for_"); g.add_argument("--subject")
     p.add_argument("--mine", action="store_true"); p.add_argument("--stale", nargs="?", type=float, const=6.0, metavar="HOURS")
@@ -6938,6 +6962,12 @@ def main():
                 who_str(l.get("proposed_by") or {}), end_str(other_end(l)) + end_note(other_end(l)["repo"], other_end(l)["role"]),
                 iso(l["expires"])))
     elif a.cmd == "task":
+        if a.wait and (a.what in ("request", "seen", "cancel") or a.what in STATES):
+            sys.exit("switchboard: --wait goes with %s task <tid>, a read" % CLI_NAME)
+        if not a.wait and (a.until or a.timeout is not None):
+            sys.exit("switchboard: --until and --timeout go with --wait")
+        if a.timeout is not None and a.timeout < 0:
+            sys.exit("switchboard: --timeout is a number of seconds, 0 for no limit")
         if a.json and (a.what in ("request", "seen", "cancel") or a.what in STATES):
             sys.exit("switchboard: --json goes with %s task <tid>, a read" % CLI_NAME)
         if a.what == "request":
@@ -6948,6 +6978,8 @@ def main():
             task_cancel(a)
         elif a.what in STATES:
             task_transition(a)
+        elif a.wait:
+            task_wait(a)
         else:
             task_show(a.what, a.json)
     elif a.cmd == "tasks":

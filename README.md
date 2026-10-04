@@ -103,7 +103,7 @@ switchboard task request --to web:frontend --subject "client: regenerate" --key 
 switchboard tasks --mine
 ```
 
-A hold refuses Write and Edit under the path, and Bash commands that name it or run inside it. A task request with the same `--key` is never made twice, and a body that looks like it holds a secret is refused. The worker records `working`, `input-required`, `completed` (with commit references), `failed` or `rejected`.
+A hold refuses Write and Edit under the path, and Bash commands that name it or run inside it. A task request with the same `--key` is never made twice, and a body that looks like it holds a secret is refused. The worker records `working`, `input-required`, `completed` (with commit references), `failed` or `rejected`. `switchboard task <tid> --wait` blocks until the task is in a final state, or in the state `--until` names.
 
 ## Multi-machine use
 
