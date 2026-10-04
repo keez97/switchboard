@@ -3562,7 +3562,7 @@ def pull_due(every=None):
     STATE.mkdir(parents=True, exist_ok=True)
     stamp.touch()
     if has_remote() and not job_running():  # a live job pulls anyway. Two hooks can both pass the stamp: the second
-        start_sync_job()                     # job finds the lock taken and exits
+        start_sync_job()                     # job finds the lock taken and leaves sync.again, one more pass
 
 
 def take_sync_lock():
