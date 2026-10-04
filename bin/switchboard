@@ -5101,7 +5101,7 @@ def delivery(tid, curs):
 
 def task_wait(a):
     """switchboard task <tid> --wait: poll until the task is in the --until state, or in any final state without it, then
-    show it as a normal read does. Writes nothing and marks nothing seen while it polls. Exits 1 on timeout."""
+    show it as a normal read does. A final state other than --until ends the wait at once with exit 1. Writes nothing and marks nothing seen while it polls. Exits 1 on timeout."""
     tid = a.what
     d = task_dir(tid)
     if not d:
@@ -5113,6 +5113,12 @@ def task_wait(a):
         st = task_state(task_records(d))
         if st in want:
             return task_show(tid, a.json)
+        if st in TERMINAL:  # final, and not the state asked for: it will not change
+            print("switchboard: task %s ended %s, not %s" % (tid, st, a.until), file=sys.stderr)
+            try:
+                task_show(tid, a.json)
+            finally:
+                sys.exit(1)
         left = limit - (time.monotonic() - t0)
         if limit and left <= 0:
             sys.exit("switchboard: task %s is still %s after %gs" % (tid, st, limit))

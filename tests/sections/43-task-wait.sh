@@ -28,6 +28,13 @@ wait
 wk completed "$T3" >/dev/null; "$B" task "$T3" --wait --until completed --timeout 5 | head -1 | has "^$T3  completed" \
   && ok "--until names a final state too" || die "--until completed"
 
+T6=$(mk 6)
+( sleep 2; wk rejected "$T6" --note "not mine" >/dev/null ) & echo $! >> "$T/pids"
+s=$(date +%s); out=$("$B" task "$T6" --wait --until working --timeout 30 2>"$T/err") && rc=0 || rc=$?; e=$(( $(date +%s) - s ))
+[ "$rc" = 1 ] && [ "$e" -lt 10 ] && [ "$(head -1 "$T/err")" = "switchboard: task $T6 ended rejected, not working" ] && echo "$out" | has "^$T6  rejected  wait 6" \
+  && ok "--until working on a task the worker rejects stops at once: the task on stdout, one line on stderr, exit 1" || die "ended other state: rc $rc after ${e}s out [$out] err [$(cat "$T/err")]"
+wait
+
 T4=$(mk 4); before=$(snap)
 s=$(date +%s); out=$("$B" task "$T4" --wait --timeout 3 2>"$T/err") && rc=0 || rc=$?; e=$(( $(date +%s) - s ))
 [ "$rc" = 1 ] && [ -z "$out" ] && [ "$(cat "$T/err")" = "switchboard: task $T4 is still submitted after 3s" ] && [ "$e" -ge 3 ] && [ "$e" -lt 6 ] \
