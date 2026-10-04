@@ -105,6 +105,14 @@ switchboard tasks --mine
 
 A hold refuses Write and Edit under the path, and Bash commands that name it or run inside it. A task request with the same `--key` is never made twice, and a body that looks like it holds a secret is refused. The worker records `working`, `input-required`, `completed` (with commit references), `failed` or `rejected`.
 
+`completed` is the only state that takes `--artifact`, once for each file the worker made:
+
+```
+switchboard task completed <tid> --artifact <repo>:<commit>:<path>#<sha256>
+```
+
+The sha256 is the hash of the file's content at that commit. If a repo with that name is on the machine, switchboard checks that the file exists at the commit and that the hash matches. Otherwise it records the artifact as unverified.
+
 ## Multi-machine use
 
 Machines share a board through git: on each one the board folder is a clone of one private repo you own. Any number of machines can join; the tests run two.
@@ -145,6 +153,8 @@ switchboard unlink l5c2a1e
 ```
 
 A link two sessions make runs at most 24 hours from acceptance and closes when either session leaves its end. From your own terminal, `switchboard link` is active at once for 7 days, and you can set a longer end or a daily message cap.
+
+`switchboard links` shows when each link ends on a second line. `switchboard links --json` prints the same links and proposals as JSON, with the sends so far today and the last activity.
 
 A message from the `--from` end arrives with a header telling the receiver it may act within the scope. A task counts as an instruction when the link is live, the requester and worker are its two ends, the scope names the task's subject, and a request from another machine carries a valid signature. Everything else from another session is information, and the note says so.
 
