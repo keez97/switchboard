@@ -3763,13 +3763,52 @@ def job_running():
         return False  # no state dir, or one that cannot be written: no job can hold its lock there either
 
 
+_VERSION = []  # plugin_version's one read
+
+
+def plugin_version():
+    """This copy's switchboard version, from the .claude-plugin/plugin.json of the checkout or plugin it sits in,
+    found through _ME (the real path behind the links that run it), read once a process; None without one."""
+    if not _VERSION:
+        pj = load(Path(_ME).parent.parent / ".claude-plugin" / "plugin.json", None)
+        v = pj.get("version") if isinstance(pj, dict) else None
+        _VERSION.append(v if vtuple(v) else None)
+    return _VERSION[0]
+
+
+def vtuple(v):
+    """A version's leading numbers as a tuple to compare ("0.8.0" -> (0, 8, 0)); None for anything else."""
+    m = re.match(r"\d+(?:\.\d+)*", v) if isinstance(v, str) else None
+    return tuple(int(x) for x in m.group().split(".")) if m else None
+
+
 def stamp_machine():
-    """machines/<name>.json: when this machine last synced, refreshed at most hourly so an idle machine is not mistaken
-    for a dead one. One writer per file."""
+    """machines/<name>.json: when this machine last synced and the switchboard version it runs, refreshed at most hourly
+    so an idle machine is not mistaken for a dead one, and at once when the version changes. One writer per file, but
+    older copies on the same machine write it too (the sync timer's CLI before its next SessionStart repoint, a session
+    started before an upgrade, ~/.claude/board): the stored version is never lowered, so a stamp names the newest
+    switchboard the machine runs. Versions older than 0.8.0 write no version and drop it; the next newer run puts it
+    back."""
     f = BOARD / "machines" / (MACHINE + ".json")
     old = load(f, {})
-    if now() - (old.get("synced") or 0) >= 3600:
-        save(f, {"machine": MACHINE, "synced": now()})
+    old = old if isinstance(old, dict) else {}
+    have, mine = old.get("version"), plugin_version()
+    keep = have if vtuple(have) and (not mine or vtuple(have) > vtuple(mine)) else mine
+    if now() - (old.get("synced") or 0) >= 3600 or keep != have:
+        save(f, dict({"machine": MACHINE, "synced": now()}, **({"version": keep} if keep else {})))
+
+
+def machines_behind(v):
+    """The machines whose stamp names no version, or one older than RECORD_MIN_VERSION[v], the first switchboard that
+    reads records of version v: until this is empty, a record of version v means less on some machine."""
+    want, out = vtuple(RECORD_MIN_VERSION[v]), []
+    for f in sorted((BOARD / "machines").glob("*.json")):
+        m = load(f, None)
+        m = m if isinstance(m, dict) else {}
+        have = vtuple(m.get("version"))
+        if not have or have < want:
+            out.append(m["machine"] if isinstance(m.get("machine"), str) and m["machine"] else f.stem)
+    return out
 
 
 def run_bounded(args, timeout, cwd=None):
@@ -5263,7 +5302,8 @@ def link_check(req, reader=None, d=None, timeout=20):
     ends = [e if isinstance(e, dict) else {} for e in (l.get("from"), l.get("to"))]
     by, at = agent_seat(l, ends[0]), agent_seat(l, ends[1])
     rs = req.get("seat")
-    out["verdict"] = ("link proposed, not accepted" if l.get("state") == "proposed" and not l.get("revoked") else
+    out["verdict"] = ("link of record format %s, newer than this switchboard reads" % l["v"] if too_new(l) else
+                      "link proposed, not accepted" if l.get("state") == "proposed" and not l.get("revoked") else
                       "link revoked" if l.get("revoked") else
                       "link expired" if l.get("until") and l["until"] <= now() else
                       "from is not the requester" if not out["from_is_requester"] else
@@ -5550,7 +5590,8 @@ def task_request(a):
         ends = [e if isinstance(e, dict) else {} for e in (l.get("from"), l.get("to"))]
         scope = str(l.get("scope") or "")
         if not is_active(l):
-            why = "it is expired, revoked or a proposal not yet accepted"
+            why = ("it is of record format %s, newer than this switchboard reads" % l["v"] if too_new(l) else
+                   "it is expired, revoked or a proposal not yet accepted")
         elif (end_pair(l.get("from")), end_pair(l.get("to"))) != (end_pair(requester), end_pair(worker)):
             why = "it runs from %s to %s, and this request is from %s to %s" % (
                 end_str(ends[0]), end_str(ends[1]), end_str(requester), end_str(worker))
@@ -6126,6 +6167,16 @@ LINK_DAYS, LINK_IDLE_DAYS = 7, 3  # a link ends by itself: after LINK_DAYS unles
 # before that and ends unanswered after PROPOSAL_HOURS. Accepted, it runs AGENT_LINK_HOURS from acceptance with at
 # no daily cap unless the proposer set one. Longer, extending it, or raising a cap it has, is the owner's, from a terminal.
 PROPOSAL_HOURS, AGENT_LINK_HOURS = 24, 24
+# The format of the link, grant and policy records this copy writes, as "v" in each. A record of a later format
+# carries no authority here: a reader that does not know what its fields mean must not act on them the old way.
+# RECORD_MIN_VERSION is the first switchboard that reads each format (machines_behind).
+RECORD_V = 1
+RECORD_MIN_VERSION = {1: "0.8.0"}
+
+
+def too_new(l):
+    """A record of a later format than RECORD_V (an int "v" above it)."""
+    return isinstance(l, dict) and type(l.get("v")) is int and l["v"] > RECORD_V
 
 
 def cap_str(cap, unit="messages a day"):
@@ -6134,8 +6185,10 @@ def cap_str(cap, unit="messages a day"):
 
 
 def is_active(l):
-    """A link carries authority: not closed, not a proposal waiting for its other end, not past its end date."""
-    return bool(l) and not l.get("revoked") and l.get("state") != "proposed" and (not l.get("until") or l["until"] > now())
+    """A link carries authority: not closed, not a proposal waiting for its other end, not past its end date, and of a
+    format this copy reads."""
+    return bool(l) and not too_new(l) and not l.get("revoked") and l.get("state") != "proposed" and \
+        (not l.get("until") or l["until"] > now())
 
 
 def proposals():
@@ -6256,7 +6309,15 @@ def reap_links():
 
 
 def links(active=True):
-    out = [l for l in (load(f, None) for f in (BOARD / "links").glob("*.json")) if l]
+    """The link records; a record of a later format than this copy reads is left out of both, logged once."""
+    out = []
+    for f in (BOARD / "links").glob("*.json"):
+        l = load(f, None)
+        if too_new(l):
+            bad_record(f, "record format %d, and this switchboard (%s) reads format %d and older: no authority here"
+                       % (l["v"], plugin_version() or "version unknown", RECORD_V))
+        elif l:
+            out.append(l)
     return [l for l in out if not active or is_active(l)]
 
 
@@ -6315,8 +6376,8 @@ def link_propose(a, ends, d):
     rec = acting_as(mine["repo"], mine["role"], d, taking=True)  # exits with the reason: not this repo, or held by another
     other = ends[1] if mine is ends[0] else ends[0]
     lid = "l%s" % hashlib.sha256(json.dumps(ends + [now(), os.urandom(8).hex()]).encode()).hexdigest()[:6]
-    l = {"id": lid, "from": ends[0], "to": ends[1], "scope": a.scope, "covers": a.covers, "state": "proposed", "cap": cap,
-         "span": span,
+    l = {"v": RECORD_V, "id": lid, "from": ends[0], "to": ends[1], "scope": a.scope, "covers": a.covers,
+         "state": "proposed", "cap": cap, "span": span,
          "until": now(),  # code older than proposals reads a proposal as expired, so it carries no authority there either
          "created": now(), "expires": now() + PROPOSAL_HOURS * 3600, "machine": MACHINE, "by_session": d["sessionId"],
          "proposed_by": seat_record(rec, mine)}
@@ -6353,6 +6414,9 @@ def link_answer(a):
     if l.get("expires", 0) <= now():
         sys.exit("switchboard: proposal %s expired unanswered at %s. Nothing was written; its proposer may propose again."
                  % (a.lid, iso(l["expires"])))
+    if a.what == "accept" and too_new(l):
+        sys.exit("switchboard: proposal %s is of record format %s, newer than this switchboard (%s) reads: accept it "
+                 "from a newer one. Nothing was written." % (a.lid, l["v"], plugin_version() or "version unknown"))
     if a.what == "accept" and covers_of(l) == COVERS_NONE:
         sys.exit("switchboard: proposal %s has no covers list (made by an older switchboard): propose again with "
                  "--covers. Nothing was written." % a.lid)
@@ -7556,8 +7620,8 @@ def main():
                 plan.append((end, r, "chosen with --to-session" if a.to_session and end is ends[1] else
                              "its title carries @%s" % end["role"] if r and tagged(r, end["role"]) else
                              "the only live session in that repo"))
-        save(BOARD / "links" / (lid + ".json"), {"id": lid, "from": ends[0], "to": ends[1], "scope": a.scope,
-                                                 "covers": a.covers,
+        save(BOARD / "links" / (lid + ".json"), {"v": RECORD_V, "id": lid, "from": ends[0], "to": ends[1],
+                                                 "scope": a.scope, "covers": a.covers,
                                                  "until": parse_until(a.until) if a.until else now() + LINK_DAYS * 86400, "cap": a.cap,
                                                  "created": now(), "machine": MACHINE, "by_session": d.get("sessionId", "")})
         write_event("link", "link:" + lid, "link %s created: %s:%s directs %s:%s within: %s (%s)" % (
