@@ -354,7 +354,7 @@ ok(clean("east") and clean("west") and same_file("holds/%s.json" % H) and x.get(
 pair("role")
 hook("east", "SessionStart", T + "/alpha", "S1"); hook("west", "SessionStart", T + "/alpha", "S3")
 round_()
-r1 = on("east", ["role", "lead"], SWITCHBOARD_SESSION_ID="S1")[0]
+r1 = on("east", ["role", "lead"], SWITCHBOARD_SESSION_ID="S1", SWITCHBOARD_NOW=str(NOW))[0]  # under load a minute passes
 r3 = on("west", ["role", "lead"], SWITCHBOARD_SESSION_ID="S3", SWITCHBOARD_NOW=str(NOW + 60))[0]
 rp = [f for f in os.listdir(clone("east") + "/roles") if f.endswith("--lead.json")]
 setup(r1 == r3 == 0 and len(rp) == 1, "lead taken on both: %s %s %s" % (r1, r3, rp))
