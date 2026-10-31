@@ -3642,7 +3642,7 @@ def dropped_line():
 
 
 # not AUTH_PATHS: nothing in this version writes them, so a policy.json or grants/ in the clone is not the owner's and
-# is never committed or pushed
+# sync never stages it. One a session stages itself with git is committed with the rest of the index; nothing reads it
 SYNC_PATHS = ("events", "holds", "registry", "subs", "sessions", "roles", "links", "tasks", "archive", "machines",
               "defaults.json", ".gitattributes")
 # the .gitattributes lines a board made before policy lacks: sync appends them (board_attrs)
@@ -4584,7 +4584,8 @@ def old_hooks():
     for f in sorted(PROCS.glob("pid-*.json")) if PROCS.is_dir() else []:
         try:
             p = load(f, None)
-            if not isinstance(p, dict) or not p.get("procStart") or p["procStart"] != proc_start(int(p.get("pid"))):
+            if not isinstance(p, dict) or type(p.get("pid")) is not int or not p.get("procStart") or \
+                    p["procStart"] != proc_start(p["pid"]):
                 continue
             v = p.get("version") if isinstance(p.get("version"), str) else None
             if v is None or vtuple(v) is None or mine and vtuple(v) < mine:
@@ -7333,6 +7334,67 @@ def bin_link():
     CLI_NAME = "switchboard"
 
 
+def copy_version(cli):
+    """The version in the plugin.json of the plugin folder holding the CLI path cli (two levels up), or None."""
+    pj = load(Path(cli).parent.parent / ".claude-plugin" / "plugin.json", None)
+    v = pj.get("version") if isinstance(pj, dict) else None
+    return v if vtuple(v) else None
+
+
+def older_copy(link):
+    """The CLI path link names, by its text, when that is another switchboard copy in the plugin cache (cache_cli)
+    whose version is below this copy's or unreadable (its folder gone, say); else ''. One readlink when the link names
+    this CLI. Never raises."""
+    try:
+        to = os.path.normpath(os.path.join(str(link.parent), os.readlink(link)))
+    except OSError:
+        return ""  # not there, or not a link
+    if to == _ME or not cache_cli(to):
+        return ""
+    mine, theirs = vtuple(plugin_version()), vtuple(copy_version(to))
+    return to if mine and (theirs is None or theirs < mine) else ""
+
+
+def repoint_old_links():
+    """Each hook event that marks its process: BIN_LINK and STATE_CLI are turned back to this CLI when they link to an
+    older copy in the plugin cache. A session started before an upgrade runs the old copy's SessionStart, which turns
+    both to itself at each start, clear and compact, and then every `switchboard` through PATH and every merge driver
+    run the old code (0.7.0 closes a link with no end after 3 idle days). Only the copy the hooks run (hooks_cli) does
+    it, and only over a link to an older cache copy: never to a lower version, and never over a file or a link
+    elsewhere. Never raises."""
+    try:
+        for link in (BIN_LINK, STATE_CLI):
+            if older_copy(link) and hooks_cli():
+                tmp = link.with_name(".%s.tmp%d" % (link.name, os.getpid()))
+                os.symlink(_ME, tmp)
+                os.replace(tmp, link)  # a link over a link: a reader sees the old one or the new one
+    except Exception as e:
+        log_error("repoint_old_links", e)
+
+
+def cli_links_line():
+    """For status: BIN_LINK and STATE_CLI when they lead to a copy older than the newest switchboard in the plugin
+    cache, with the newest copy's path to check from (an older copy's own status has no such line), or ''."""
+    try:
+        cands = [(vtuple(copy_version(c)), str(c)) for c in PLUGIN_CACHE.glob("*/switchboard/*/bin/switchboard")]
+        cands = [x for x in cands if x[0]]
+        if not cands:
+            return ""
+        top, newest = max(cands)
+        old = []
+        for link in (BIN_LINK, STATE_CLI):
+            if os.path.islink(link) and cache_cli(os.path.join(str(link.parent), os.readlink(link))):
+                v = copy_version(os.path.realpath(link))
+                if not vtuple(v) or vtuple(v) < top:
+                    old.append("%s runs %s" % (tilde(link), v or "a copy that is gone"))
+        return ("cli: %s, older than %s in the plugin cache. The next hook event of a session on %s turns them to it; "
+                "check from %s status" % ("; ".join(old), copy_version(newest), copy_version(newest), tilde(newest))
+                if old else "")
+    except Exception as e:
+        log_error("cli_links_line", e)
+        return ""
+
+
 def hook():
     _HOOK_T0[0] = T0
     raw = sys.stdin.read()
@@ -7384,6 +7446,7 @@ def hook():
     session["repo"] = repo_of(cwd)[0]
     if event in ("SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "SubagentStop"):
         remember_process(session, recheck=event in ("SessionStart", "UserPromptSubmit"))
+        repoint_old_links()
     texts, fault, cfg = [], "", ""
     # each step below runs through safe(): a failure is logged with its function and line, and the next step runs
     if event == "SessionStart":
@@ -7939,9 +8002,9 @@ def main():
         ml = machines_line()
         if ml:
             print("machines: " + ml)
-        oh = old_hooks_line()
-        if oh:
-            print(oh)
+        for x in (old_hooks_line(), cli_links_line()):
+            if x:
+                print(x)
         for k in key_lines():
             print(k)
         print(rename_fix_text(rename_fixes(BOARD, MACHINE), MACHINE), end="")

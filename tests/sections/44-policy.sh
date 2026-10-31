@@ -17,15 +17,17 @@ denied(){ has '"permissionDecision": *"deny"'; }
 reap_at(){ SWITCHBOARD_NOW=$1 up "$T/alpha" S1 next >/dev/null; }   # a prompt publishes, and a publish reaps links at that time
 propose(){ SWITCHBOARD_TEST_PROPOSE=1 SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "$1" --covers "$1" "${@:2}"; }
 accept(){ SWITCHBOARD_TEST_PROPOSE=1 SWITCHBOARD_SESSION_ID=S2 "$B" link accept "$1" >/dev/null; }
-sbp(){ # policy-json expression: the expression's value, in-process, with policy() giving policy_values(policy-json)
+sbp(){ # policy-json expression: the expression's value, in-process, with policy() giving policy_values(policy-json); - leaves policy() as it is
   python3 - "$B" "$@" <<'PY'
 import importlib.machinery, importlib.util, json, sys
 l = importlib.machinery.SourceFileLoader("sb", sys.argv[1]); m = importlib.util.module_from_spec(importlib.util.spec_from_loader("sb", l))
-l.exec_module(m); pol = m.policy_values(json.loads(sys.argv[2])); m.policy = lambda: dict(pol)
+l.exec_module(m)
+if sys.argv[2] != "-":
+    pol = m.policy_values(json.loads(sys.argv[2])); m.policy = lambda: dict(pol)
 print(eval(sys.argv[3], {"m": m, "Path": __import__("pathlib").Path}))
 PY
 }
-sb_py(){ sbp '{}' "$@"; }
+sb_py(){ sbp - "$@"; }
 sbm(){ # policy-json args...: the CLI run in-process with policy() giving policy_values(policy-json)
   python3 - "$B" "$@" <<'PY'
 import importlib.machinery, importlib.util, json, sys
@@ -216,5 +218,34 @@ d = json.load(open(f)); d.pop("version"); json.dump(d, open(f, "w"))
 m.hook_process = lambda: pid; m.mark_process("S2")
 sys.exit(0 if json.load(open(f)).get("version") == m.plugin_version() and m.plugin_version() else 1)
 PY
+
+# ---- the PATH CLI and STATE/cli: an older cache copy's SessionStart takes them; this copy's next hook takes them back
+C="$HOME/.claude/plugins/cache/mkt/switchboard"
+for v in 0.7.0 0.8.0 0.9.0; do mkdir -p "$C/$v/bin" "$C/$v/.claude-plugin"; echo "{\"name\": \"switchboard\", \"version\": \"$v\"}" > "$C/$v/.claude-plugin/plugin.json"; done
+cp "$TESTS/fixtures/switchboard-0.7.0" "$C/0.7.0/bin/switchboard"; cp "$B" "$C/0.8.0/bin/switchboard"; cp "$B" "$C/0.9.0/bin/switchboard"
+B8="$C/0.8.0/bin/switchboard"; BL="$HOME/.local/bin/switchboard"; SC="$SWITCHBOARD_STATE/cli"; mkdir -p "$HOME/.local/bin"
+point(){ ln -sfn "$1" "$BL"; ln -sfn "$1" "$SC"; }
+hook8(){ python3 -c "import json,sys; print(json.dumps({'hook_event_name':sys.argv[1],'cwd':sys.argv[2],'session_id':'S1','prompt':'x','tool_name':'Read','tool_input':{}}))" "$1" "$T/alpha" \
+  | CLAUDE_PLUGIN_ROOT="${2-$C/0.8.0}" "$B8" hook >/dev/null; }
+links_at(){ [ "$(readlink "$BL")" = "$1" ] && [ "$(readlink "$SC")" = "$1" ]; }
+point "$C/0.7.0/bin/switchboard"; hook8 UserPromptSubmit
+links_at "$B8" && ok "a prompt's hook turns ~/.local/bin/switchboard and STATE/cli from the 0.7.0 cache copy to this 0.8.0 one" || die "not repointed: $(readlink "$BL") $(readlink "$SC")"
+point "$C/0.7.0/bin/switchboard"; hook8 PostToolUse; hook8 Stop
+links_at "$B8" && ok "so do PostToolUse and Stop" || die "PostToolUse/Stop: $(readlink "$BL")"
+point "$C/0.6.0/bin/switchboard"; hook8 UserPromptSubmit
+links_at "$B8" && ok "a link to a cache copy whose folder is gone is turned too" || die "gone: $(readlink "$BL")"
+point "$C/0.9.0/bin/switchboard"; hook8 UserPromptSubmit
+links_at "$C/0.9.0/bin/switchboard" && ok "a link to a newer cache copy is left as it is" || die "newer moved: $(readlink "$BL")"
+mkdir -p "$T/elsewhere/bin"; cp "$TESTS/fixtures/switchboard-0.7.0" "$T/elsewhere/bin/switchboard"; point "$T/elsewhere/bin/switchboard"; hook8 UserPromptSubmit
+links_at "$T/elsewhere/bin/switchboard" && ok "a link outside the plugin cache is left as it is" || die "non-cache moved: $(readlink "$BL")"
+rm -f "$BL"; cp "$TESTS/fixtures/switchboard-0.7.0" "$BL"; ln -sfn "$C/0.7.0/bin/switchboard" "$SC"; hook8 UserPromptSubmit
+[ ! -L "$BL" ] && cmp -s "$BL" "$TESTS/fixtures/switchboard-0.7.0" && [ "$(readlink "$SC")" = "$B8" ] && ok "a file at ~/.local/bin/switchboard is left as it is" || die "file replaced"
+rm -f "$BL"; point "$C/0.7.0/bin/switchboard"; hook8 UserPromptSubmit ""
+links_at "$C/0.7.0/bin/switchboard" && ok "a copy the hooks do not run (no CLAUDE_PLUGIN_ROOT) moves neither" || die "moved by a non-hook copy: $(readlink "$BL")"
+st=$("$B8" status)
+echo "$st" | has "^cli: ~/.local/bin/switchboard runs 0.7.0; .*/state/cli runs 0.7.0, older than 0.9.0 in the plugin cache\. .* check from ~/.claude/plugins/cache/mkt/switchboard/0.9.0/bin/switchboard status$" \
+  && ok "status names links at an older copy than the newest in the cache, and the newest copy's path to check from" || die "status cli line: $st"
+point "$C/0.9.0/bin/switchboard"; ! "$B8" status | has "^cli:" && ok "with both at the newest copy, status has no cli line" || die "cli line stays: $("$B8" status | grep '^cli:')"
+rm -f "$BL" "$SC"
 
 finish
