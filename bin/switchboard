@@ -1251,6 +1251,9 @@ RECORD_DIRS = ("events", "holds", "sessions", "roles", "links", "registry", "sub
 # allowed_signers is the owner's: no session writes here. Only `init` run from a terminal, not a session, adds its own
 # machine's line
 KEY_DIRS = ("keys",)
+# the link policy and the owner's grants decide how much authority a link carries: like keys/, no session writes them.
+# Nothing in this version writes them; the owner does, from a terminal
+AUTH_PATHS = ("policy.json", "grants")
 
 
 def record_write(tool, tool_input, cwd, dirs_=RECORD_DIRS):
@@ -2366,7 +2369,7 @@ def link_guard(cmd):
             elif sub == "link-cap":
                 pos = [x for x in args if not x.startswith("-") or num(x) is not None]
                 l = load(BOARD / "links" / (pos[0] + ".json"), None) if pos and re.fullmatch(r"l[0-9a-f]+", pos[0]) else None
-                n, cur = num(pos[1]) if len(pos) > 1 else None, (l or {}).get("cap", DEFAULT_CAP)
+                n, cur = num(pos[1]) if len(pos) > 1 else None, (l or {}).get("cap", POLICY_DEFAULTS["owner_cap"])
                 if l and n is not None and n < 0:
                     neg.append("sets link %s's cap to %d, which is not a cap" % (pos[0], n))
                 elif l and n is not None and cur and not n:
@@ -2379,12 +2382,14 @@ def link_guard(cmd):
                     k, eq, v = x.partition("=")
                     if k in ("--cap", "--until", "--to-session"):
                         opt[k] = v if eq else (args[i + 1] if i + 1 < len(args) else "")
-                t0 = now()
-                cap, until = num(opt.get("--cap")), until_ts(opt["--until"], t0) if opt.get("--until") else None
+                t0, hours = now(), policy()["agent_link_hours"]
+                cap, until = num(opt.get("--cap")), link_until(opt["--until"], t0) if opt.get("--until") else None
                 if cap is not None and cap < 0:
                     neg.append("asks for a link with --cap %d, which is not a cap" % cap)
-                if until is not None and until - t0 > AGENT_LINK_HOURS * 3600:
-                    why.append("asks for a link with --until %s, more than %d hours" % (opt["--until"], AGENT_LINK_HOURS))
+                if hours is not None and until == NEVER:
+                    why.append("asks for a link with --until %s, which has no end" % opt["--until"])
+                elif hours is not None and until is not None and until - t0 > hours * 3600:
+                    why.append("asks for a link with --until %s, more than %s" % (opt["--until"], hours_str(hours)))
                 if "--to-session" in opt:
                     why.append("binds another session to a link's end (--to-session)")
         if neg and not why:
@@ -2393,11 +2398,13 @@ def link_guard(cmd):
         why += neg
         if not why:
             return ""
-        return ("switchboard: refused, nothing ran. This command %s. Widening a link, and any link beyond %d hours from "
-                "acceptance, is %s's, run from a terminal. From a session: `%s link ...` "
+        hours = policy()["agent_link_hours"]
+        return ("switchboard: refused, nothing ran. This command %s. Widening a link%s is %s's, run from a terminal. "
+                "From a session: `%s link ...` "
                 "proposes a link within those limits and the other end accepts it, `%s link-cap <id> <n>` may lower "
                 "a cap, `%s unlink <id>` ends a link this session holds an end of. Tell %s if the work needs more."
-                % ("; it ".join(why), AGENT_LINK_HOURS, OWNER, CLI_NAME, CLI_NAME, CLI_NAME, OWNER))
+                % ("; it ".join(why), "" if hours is None else ", and any link beyond %s from acceptance," % hours_str(hours),
+                   OWNER, CLI_NAME, CLI_NAME, CLI_NAME, OWNER))
     except Exception as e:
         log_error("link_guard", e)
         return ""
@@ -2506,6 +2513,8 @@ KEYS_REFUSED = ("switchboard: keys are installed by %s, not by a session. keys/a
 RECORDS_REFUSED = ("switchboard: board records are written with the board CLI, not by hand. A record dropped into the "
                    "clone would reach its receiver under %s's authority header without the CLI's checks. Use "
                    "`%s link|role|hold|watch|...`; tell %s if no command covers what you need.")
+POLICY_REFUSED = ("switchboard: the link policy (policy.json) and grants/ are %s's, not a session's: they decide how "
+                  "long a link runs and who may direct whom. Nothing was written; tell %s what the work needs.")
 HELPER_BUDGET = 2.5  # seconds from the hook's start; the hook itself has 5
 
 
@@ -2538,6 +2547,8 @@ def guard(tool, tool_input, cwd):
         return KEYS_REFUSED % (OWNER, OWNER), ""
     if _main_record_write(tool, tool_input, cwd):
         return RECORDS_REFUSED % (OWNER, CLI_NAME, OWNER), ""
+    if _main_record_write(tool, tool_input, cwd, AUTH_PATHS):  # not main's: added with policy, before the helper
+        return POLICY_REFUSED % (OWNER, OWNER), ""
     holds = active_holds()
     cmd = tool_input.get("command", "") if tool == "Bash" else ""
     writes = tool == "Bash" and not read_only(cmd)
@@ -2558,6 +2569,8 @@ def guard(tool, tool_input, cwd):
             return KEYS_REFUSED % (OWNER, OWNER), ""
         if record_write(tool, tool_input, cwd):
             return RECORDS_REFUSED % (OWNER, CLI_NAME, OWNER), ""
+        if record_write(tool, tool_input, cwd, AUTH_PATHS):
+            return POLICY_REFUSED % (OWNER, OWNER), ""
         return helper_hold(tool, tool_input, cwd, cmd, writes, entries)
     except (Late, Exception) as e:  # main's verdict stands: it allowed
         log_error("guard", "the path helper %s; main's checks decided" % (
@@ -2832,7 +2845,9 @@ BOARD_FILES = {
                       "machines/*.json merge=board-record\n"
                       "tasks/**/[0-9][0-9][0-9]-*.json merge=board-task\n"
                       "tasks/**/cancel-requested.json merge=board-task\n"
-                      "tasks/**/000-request.json !merge\n",
+                      "tasks/**/000-request.json !merge\n"
+                      "policy.json merge=board-record\n"
+                      "grants/** -merge\n",
     ".gitignore": "*.tmp*\n__pycache__/\n.DS_Store\n",
     "defaults.json": "[\n"
                      ' {"kind": "json", "target": "home:.claude/settings.json", "key": "enabledPlugins", "tag": "manual"},\n'
@@ -2864,7 +2879,7 @@ def board_files(b):
 # one of the two), --always-on installs the opt-in background sync. A person runs it from a terminal, or a session
 # through /switchboard:init. keys/ is the owner's: from a session it prints the line and the command to add it.
 FIELDS = ("machine", "owner", "board_dir", "state_dir", "scan", "shared", "scope_ids", "skip")
-BOARD_NAMES = set(RECORD_DIRS) | set(BOARD_FILES) | {"keys", ".git", ".DS_Store"}  # what a board folder holds
+BOARD_NAMES = set(RECORD_DIRS) | set(BOARD_FILES) | set(AUTH_PATHS) | {"keys", ".git", ".DS_Store"}  # what a board folder holds
 ALWAYS_ON, LAUNCHD_LABEL = "switchboard-sync", "switchboard.sync"  # the systemd units' name, the launchd job's label
 # the first words of each file --always-on writes: --remove removes only those. No "--": an XML comment cannot hold it
 ALWAYS_ON_MARK = "switchboard always-on sync, written by switchboard init"
@@ -2969,6 +2984,25 @@ def board_commit(b, msg):
     rc, out = run_cmd(["git", "-C", str(b), "commit", "-q", "--allow-empty", "-m", msg] +
                       (["--"] + names if names and git(b, "rev-parse", "-q", "--verify", "HEAD") else []))
     return "git commit: %s" % last_line(out) if rc else ""
+
+
+def board_attrs(b):
+    """Append to board b's .gitattributes the NEW_ATTRS lines it lacks, when it is a board (is_board): a board made
+    before policy then merges policy.json field by field and never merges grants/. The lines added, or []. Never
+    raises."""
+    try:
+        f = b / ".gitattributes"
+        have = f.read_text() if is_board(b) else None
+        add = [x for x in NEW_ATTRS if have is not None and x not in have.splitlines()]
+        if add:
+            with tree_write(f):
+                tmp = f.with_name(".gitattributes.tmp%d" % os.getpid())
+                tmp.write_text(have + ("" if not have or have.endswith("\n") else "\n") + "".join(x + "\n" for x in add))
+                os.replace(tmp, f)
+        return add
+    except Exception as e:
+        log_error("board_attrs", e)
+        return []
 
 
 BOARD_RULE = "links/*.json merge=board-link"  # the .gitattributes line every board has: its own and a clone's
@@ -3608,7 +3642,9 @@ def dropped_line():
 
 
 SYNC_PATHS = ("events", "holds", "registry", "subs", "sessions", "roles", "links", "tasks", "archive", "machines",
-              "defaults.json", ".gitattributes")
+              "defaults.json", ".gitattributes") + AUTH_PATHS
+# the .gitattributes lines a board made before policy lacks: sync appends them (board_attrs)
+NEW_ATTRS = ("policy.json merge=board-record", "grants/** -merge")
 
 
 def driver_cmd(sub, *marks):
@@ -3961,6 +3997,7 @@ def sync_pass():
     err, pushed = "", False
     try:
         stamp_machine()  # a board write: before the window, where a second open of the tree lock here would wait on it
+        board_attrs(BOARD)  # the same
         # a fetch can die when another runs; a push can lose a race: name the refs, retry, keep the outcome
         u = upstream()
         if len(u) != 2:  # an upstream that is a local branch
@@ -4032,7 +4069,7 @@ def session_record(session):
 # ---------- presence, roles, links, messaging ----------
 
 SESS_DIR = Path(board_env("SESSIONS_DIR") or HOME / ".claude/sessions")
-PAIR_WINDOW, PAIR_LIMIT, WAKE_WINDOW, DEFAULT_CAP, REMOTE_SHOWN_DAYS = 1800, 3, 1800, 100, 3
+PAIR_WINDOW, PAIR_LIMIT, WAKE_WINDOW, REMOTE_SHOWN_DAYS = 1800, 3, 1800, 3
 REFUSE_WINDOW, NAME_STOP = 1800, {"board", "switchboard", "main", "master", "README.md", "tests"}
 WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
 
@@ -6164,11 +6201,60 @@ def rname(rid):
     return rid.rsplit("/", 1)[-1]
 
 
-LINK_DAYS, LINK_IDLE_DAYS = 7, 3  # a link ends by itself: after LINK_DAYS unless --until says otherwise, or LINK_IDLE_DAYS with no message
-# A link a session makes is a proposal until the session holding its other end accepts it; it carries no authority
-# before that and ends unanswered after PROPOSAL_HOURS. Accepted, it runs AGENT_LINK_HOURS from acceptance with at
-# no daily cap unless the proposer set one. Longer, extending it, or raising a cap it has, is the owner's, from a terminal.
-PROPOSAL_HOURS, AGENT_LINK_HOURS = 24, 24
+# Link policy: one board record, policy.json, over these defaults (decisions D2, D8, D9 of PLAN-01). A link the owner
+# makes from a terminal has no end and no idle close unless --until gives one. A link a session makes is a proposal
+# until the session holding its other end accepts it; it carries no authority before that and ends unanswered after
+# proposal_hours. Accepted, it runs agent_link_hours from acceptance with no daily cap unless the proposer set one, and
+# closes after agent_idle_days with no message. Longer, extending it, or raising a cap it has, is the owner's, from a
+# terminal. owner_cap is the daily cap of an owner link made with no --cap, and of a stored link with no cap field.
+# None is never, and only the keys in NULLABLE may be None.
+POLICY_DEFAULTS = {"agent_link_hours": 24, "agent_idle_days": 3, "owner_link_days": None, "owner_idle_days": None,
+                   "proposal_hours": 24, "owner_cap": 100}
+NULLABLE = {"owner_link_days", "owner_idle_days", "agent_link_hours"}
+OLD_IDLE_DAYS = 3  # a link written before policy (no idle_days) closes after 3 idle days, as it did when it was made
+NEVER = "never"  # --until never, and a link record's "ends" when it has no end date
+# the until of an agent link with no end: a number, since 0.7.0 compares an agent link's until unguarded (9999-12-31)
+FAR = 253402300799
+_POLICY = [None, None]  # (policy.json's stat, the policy read from it): read once per change, as the guard runs often
+
+
+def policy_ok(k, v):
+    """True when v is a value policy key k may hold: an int from 1 to 10**6, or None for a NULLABLE key."""
+    return k in POLICY_DEFAULTS and (k in NULLABLE if v is None else type(v) is int and 0 < v <= 10 ** 6)
+
+
+def policy():
+    """The link policy: policy.json's value for each key it holds a good value for, the default for the rest. A file
+    that is missing, unreadable, not an object or of a later record format gives the defaults. Never raises."""
+    f = BOARD / "policy.json"
+    try:
+        st = os.stat(f)
+        key = (st.st_mtime_ns, st.st_size, st.st_ino)
+    except OSError:
+        key = None
+    if _POLICY[1] is None or _POLICY[0] != key:
+        p = load(f, {}) if key else {}
+        if not isinstance(p, dict) or too_new(p):
+            p = {}
+        _POLICY[:] = [key, {k: p[k] if k in p and policy_ok(k, p[k]) else d for k, d in POLICY_DEFAULTS.items()}]
+    return dict(_POLICY[1])
+
+
+def link_until(s, base=None):
+    """The end --until s names for a link: NEVER for "never", else the time until_ts reads (12h and 3d from base), or
+    None when it cannot be read. The CLI and the PreToolUse guard both read a link's --until here. Never exits."""
+    return NEVER if str(s).strip().lower() == NEVER else until_ts(s, base)
+
+
+def hours_str(h):
+    return "no limit" if h is None else "%d hour%s" % (h, "" if h == 1 else "s")
+
+
+def ends_str(l):
+    """When a link ends, for notes and listings."""
+    return "never" if l.get("ends") == NEVER or not l.get("until") else iso(l["until"])
+
+
 # The format of the link, grant and policy records this copy writes, as "v" in each. A record of a later format
 # carries no authority here: a reader that does not know what its fields mean must not act on them the old way.
 # RECORD_MIN_VERSION is the first switchboard that reads each format (machines_behind).
@@ -6312,21 +6398,24 @@ def link_last_activity(l, tasks=True):
 
 
 def reap_links():
-    """Links this machine created that ran out: past their until, or LINK_IDLE_DAYS without a message. Only the
-    creating machine closes, so two clones never race on one file."""
+    """Links this machine created that ran out: past their until, or their idle_days without a message (none when
+    idle_days is null; OLD_IDLE_DAYS for a link written before policy, or one whose idle_days is not a number of days).
+    Only the creating machine closes, so two clones never race on one file."""
     for l in links(active=False):
         if l.get("revoked") or l.get("machine") != MACHINE:
             continue
         if l.get("state") == "proposed":
             if l.get("expires", 0) <= now():
-                close_link(l, "proposal expired unanswered after %d hours (%s waited to accept)" % (
-                    PROPOSAL_HOURS, end_str(other_end(l))), "switchboard")
+                close_link(l, "proposal expired unanswered after %s (%s waited to accept)" % (
+                    hours_str(policy()["proposal_hours"]), end_str(other_end(l))), "switchboard")
             continue
+        idle = l.get("idle_days", OLD_IDLE_DAYS)
+        idle = idle if idle is None or policy_ok("agent_idle_days", idle) else OLD_IDLE_DAYS
         if l.get("until") and l["until"] <= now():
             close_link(l, "expired %s" % iso(l["until"]), "switchboard")
-        elif now() - link_last_activity(l, tasks=False) >= LINK_IDLE_DAYS * 86400 and \
-                now() - link_last_activity(l) >= LINK_IDLE_DAYS * 86400:  # tasks are read only when the log says idle
-            close_link(l, "idle for %d days" % LINK_IDLE_DAYS, "switchboard")
+        elif idle is not None and now() - link_last_activity(l, tasks=False) >= idle * 86400 and \
+                now() - link_last_activity(l) >= idle * 86400:  # tasks are read only when the log says idle
+            close_link(l, "idle for %d days" % idle, "switchboard")
 
 
 def links(active=True):
@@ -6342,32 +6431,50 @@ def links(active=True):
     return [l for l in out if not active or is_active(l)]
 
 
+def agent_span(l):
+    """The seconds proposal l runs from acceptance: its span, else agent_link_hours now; None is no end."""
+    if _num(l.get("span")) and l["span"] > 0:
+        return int(l["span"])
+    hours = policy()["agent_link_hours"]
+    return None if hours is None else hours * 3600
+
+
 def span_str(sec):
+    if sec is None:
+        return "no end"
     return "%d hours" % (sec // 3600) if sec % 3600 == 0 else "%dh%02dm" % (sec // 3600, sec % 3600 // 60)
 
 
 def agent_limits(a):
-    """(cap, span in seconds) a session asked for with `board link`, within the agent limits; exits with the
-    refusal otherwise. The owner widens from a terminal."""
-    cap, span, why = 0 if a.cap is None else a.cap, AGENT_LINK_HOURS * 3600, []
+    """(cap, span in seconds) a session asked for with `board link`, within the agent limits of policy(); exits with
+    the refusal otherwise. A span of None is no end, possible only while agent_link_hours is None. The owner widens
+    from a terminal."""
+    hours = policy()["agent_link_hours"]
+    cap, span, why = 0 if a.cap is None else a.cap, None if hours is None else hours * 3600, []
     if cap < 0:
         sys.exit("switchboard: --cap %d is not a cap; use a number of messages a day, or leave it out for no cap. Nothing was "
                  "written." % cap)
     if a.until:
         t0 = now()
-        span = until_ts(a.until, t0)
-        span = (span if span is not None else parse_until(a.until)) - t0
-        if span <= 0:
-            sys.exit("switchboard: --until %s is already past. Nothing was written." % a.until)
-        if span > AGENT_LINK_HOURS * 3600:
-            why.append("--until %s (more than %d hours)" % (a.until, AGENT_LINK_HOURS))
+        t = link_until(a.until, t0)
+        if t == NEVER:
+            span = None
+            if hours is not None:
+                why.append("--until %s (no end)" % a.until)
+        else:
+            span = (t if t is not None else parse_until(a.until)) - t0
+            if span <= 0:
+                sys.exit("switchboard: --until %s is already past. Nothing was written." % a.until)
+            if hours is not None and span > hours * 3600:
+                why.append("--until %s (more than %s)" % (a.until, hours_str(hours)))
     if a.to_session:
         why.append("--to-session (it binds another session to an end; from a session the other end binds when its "
                    "session accepts)")
     if why:
-        sys.exit("switchboard: refused. A link made from a session runs at most %d hours from acceptance. This asked for %s. "
+        sys.exit("switchboard: refused. A link made from a session runs %s from acceptance. This asked for %s. "
                  "Nothing was written. Propose within that limit; a longer link, or extending one, is %s's, from a "
-                 "terminal." % (AGENT_LINK_HOURS, " and ".join(why), OWNER))
+                 "terminal." % ("as long as it asks" if hours is None else "at most %s" % hours_str(hours),
+                                " and ".join(why), OWNER))
     return cap, span
 
 
@@ -6400,7 +6507,7 @@ def link_propose(a, ends, d):
     l = {"v": RECORD_V, "id": lid, "from": ends[0], "to": ends[1], "scope": a.scope, "covers": a.covers,
          "state": "proposed", "cap": cap, "span": span,
          "until": now(),  # code older than proposals reads a proposal as expired, so it carries no authority there either
-         "created": now(), "expires": now() + PROPOSAL_HOURS * 3600, "machine": MACHINE, "by_session": d["sessionId"],
+         "created": now(), "expires": now() + policy()["proposal_hours"] * 3600, "machine": MACHINE, "by_session": d["sessionId"],
          "proposed_by": seat_record(rec, mine)}
     save(BOARD / "links" / (lid + ".json"), l)
     if not held:
@@ -6488,19 +6595,22 @@ def link_answer(a):
         if taking:
             bind(rec, other["role"], "it accepted link %s" % a.lid)
         # the list this session was shown: covers_shown reads an acceptance without it as one that saw the scope only
-        l.update({"state": "active", "accepted": now(), "until": now() + int(l.get("span") or AGENT_LINK_HOURS * 3600),
-                  "accepted_by": dict(who, covers=l.get("covers"))})
+        span = agent_span(l)
+        l.update({"state": "active", "accepted": now(), "until": FAR if span is None else now() + span,
+                  "idle_days": policy()["agent_idle_days"], "accepted_by": dict(who, covers=l.get("covers"))})
+        if span is None:
+            l["ends"] = NEVER
         save(BOARD / "links" / (a.lid + ".json"), l)
         # both name the list just stamped, as the proposal note names it: a list changed after the note shows here
         cov = covers_str(l)
         write_event("link", "link:" + a.lid, "link %s accepted by %s: %s within: %s. It covers tasks whose subject starts "
                     "with: %s. Until %s, %s. Proposed by %s. Made by two sessions within the agent limits; extending it or "
                     "raising its cap is %s's" % (
-                        a.lid, who_str(who), link_ends(l), l["scope"], cov, iso(l["until"]), cap_str(l.get("cap")), who_str(p),
+                        a.lid, who_str(who), link_ends(l), l["scope"], cov, ends_str(l), cap_str(l.get("cap")), who_str(p),
                         OWNER),
                     [l["from"]["repo"], l["to"]["repo"]], {"session_id": rec["session_id"]}, "link%saccept" % a.lid)
         print("link %s accepted: %s within: %s. It covers tasks whose subject starts with: %s. Until %s, %s%s" % (
-            a.lid, link_ends(l), l["scope"], cov, iso(l["until"]), cap_str(l.get("cap")),
+            a.lid, link_ends(l), l["scope"], cov, ends_str(l), cap_str(l.get("cap")),
             "; this session now holds %s" % addr if taking else ""))
     if rec and agent_caller(d):
         tell_cli(rec["session_id"], end_act("accepted" if accept else "declined", a.lid, l, pe), pe["repo"] != rec["repo"])
@@ -6554,7 +6664,7 @@ def send_guard(session, ti):
                             l["id"], rname(other["repo"]), other["role"], other["role"], OWNER))
     l, _ = link_between(mine, peer) if mine and peer else (None, "")
     if l:
-        cap = l.get("cap", DEFAULT_CAP)
+        cap = l.get("cap", POLICY_DEFAULTS["owner_cap"])
         if cap and sent_today(l["id"]) >= cap:
             return ("switchboard: link %s reached its cap of %d messages today. Stop, summarise the state for %s, "
                     "and wait. %s can raise it with `%s link-cap %s <n>`." % (l["id"], cap, OWNER, OWNER, CLI_NAME, l["id"]))
@@ -6844,7 +6954,7 @@ def incoming(session, prompt):
                    "direct this session's work within: %s. Act on it within that scope without asking %s; the link is "
                    "two sessions' agreement, not %s's approval." % (
                        l["id"], who_str(l.get("proposed_by") or {}), who_str(l["accepted_by"]), iso(l["accepted"])[:10],
-                       iso(l["until"]), src, l["scope"], OWNER, OWNER))
+                       ends_str(l), src, l["scope"], OWNER, OWNER))
         else:
             why = ("This message arrives over link %s. %s authorised %s on %s to direct this session's work within: %s. "
                    "Act on it without asking %s." % (l["id"], OWNER, src, iso(l["created"])[:10], l["scope"], OWNER))
@@ -6860,8 +6970,9 @@ def incoming(session, prompt):
 
 def still_owners():
     return ("Still %s's alone: deleting or rewriting history, anything public, spending money, secrets, permissions, "
-            "CLAUDE.md, settings, hooks, a link beyond %d hours or extending one, raising a link's cap, releases, "
-            "overriding a hold." % (OWNER, AGENT_LINK_HOURS))
+            "CLAUDE.md, settings, hooks, %s, raising a link's cap, releases, "
+            "overriding a hold." % (OWNER, "extending a link" if policy()["agent_link_hours"] is None else
+                                    "a link beyond %s or extending one" % hours_str(policy()["agent_link_hours"])))
 
 
 def role_notes(session, rec, source):
@@ -6878,7 +6989,7 @@ def role_notes(session, rec, source):
                            "Today %d messages sent (%s).%s Full log: %s" % (
                                end["role"], l["id"], l["scope"], rname(other["repo"]), other["role"],
                                peer_note(other["repo"], other["role"]),
-                               sent_today(l["id"]), "cap %d" % l.get("cap", DEFAULT_CAP) if l.get("cap", DEFAULT_CAP) else "no cap",
+                               sent_today(l["id"]), "cap %d" % l.get("cap", POLICY_DEFAULTS["owner_cap"]) if l.get("cap", POLICY_DEFAULTS["owner_cap"]) else "no cap",
                                (" Last exchanges: %s." % last) if last else "",
                                BOARD / "links" / (l["id"] + ".log.jsonl")) + open_tasks_note(end["repo"], end["role"]))
                 told(rec, l)
@@ -6909,7 +7020,7 @@ def link_notes(rec):
                     made = ("by a link %s proposed and %s accepted on %s, within the agent limits: it ends %s, %s, "
                             "and extending it is %s's" % (
                                 who_str(l.get("proposed_by") or {}), who_str(l["accepted_by"]), iso(l["accepted"])[:10],
-                                iso(l["until"]), cap_str(l.get("cap")), OWNER)) if l.get("accepted_by") else \
+                                ends_str(l), cap_str(l.get("cap")), OWNER)) if l.get("accepted_by") else \
                         "by a link %s approved on %s" % (OWNER, iso(l["created"])[:10])
                     out.append("switchboard: this session is bound to link %s as %s, %s. "
                                "Scope: %s. Counterpart: %s:%s%s. %s" % (
@@ -6984,7 +7095,7 @@ def proposal_notes(rec, peek=False):
                         "Its end %s:%s is open and this session holds no role here; accepting binds this session to it"
                         % (rname(other["repo"]), other["role"]),
                         rname(l["from"]["repo"]), l["from"]["role"], rname(l["to"]["repo"]), l["to"]["role"],
-                        span_str(int(l.get("span") or AGENT_LINK_HOURS * 3600)), cap_str(l.get("cap")), CLI_NAME, l["id"],
+                        span_str(agent_span(l)), cap_str(l.get("cap")), CLI_NAME, l["id"],
                         CLI_NAME, l["id"], iso(l["expires"]), OWNER, tell_line(act)))
             if mine and (p.get("repo") != rec["repo"] or p.get("machine") != MACHINE):
                 tell_act(rec["session_id"], "received" + l["id"], dict(act, end=other))  # an open-end offer is guidance
@@ -7615,7 +7726,8 @@ def main():
         d = own_session() or {}
         if agent_caller(d):
             return link_propose(a, ends, d)
-        a.cap = DEFAULT_CAP if a.cap is None else a.cap
+        pol = policy()
+        a.cap = pol["owner_cap"] if a.cap is None else a.cap
         if a.cap < 0:
             sys.exit("switchboard: --cap %d is not a cap; use a number of messages a day, or 0 for no cap. Nothing was "
                      "written." % a.cap)
@@ -7641,10 +7753,14 @@ def main():
                 plan.append((end, r, "chosen with --to-session" if a.to_session and end is ends[1] else
                              "its title carries @%s" % end["role"] if r and tagged(r, end["role"]) else
                              "the only live session in that repo"))
-        save(BOARD / "links" / (lid + ".json"), {"v": RECORD_V, "id": lid, "from": ends[0], "to": ends[1],
-                                                 "scope": a.scope, "covers": a.covers,
-                                                 "until": parse_until(a.until) if a.until else now() + LINK_DAYS * 86400, "cap": a.cap,
-                                                 "created": now(), "machine": MACHINE, "by_session": d.get("sessionId", "")})
+        # the end --until names, else owner_link_days; with neither the link has no until and "ends": "never"
+        until = (link_until(a.until) or parse_until(a.until)) if a.until else \
+            NEVER if pol["owner_link_days"] is None else now() + pol["owner_link_days"] * 86400
+        save(BOARD / "links" / (lid + ".json"), dict({"v": RECORD_V, "id": lid, "from": ends[0], "to": ends[1],
+                                                      "scope": a.scope, "covers": a.covers, "cap": a.cap,
+                                                      "idle_days": pol["owner_idle_days"], "created": now(),
+                                                      "machine": MACHINE, "by_session": d.get("sessionId", "")},
+                                                     **({"ends": NEVER} if until == NEVER else {"until": until})))
         write_event("link", "link:" + lid, "link %s created: %s:%s directs %s:%s within: %s (%s)" % (
             lid, rname(ends[0]["repo"]), ends[0]["role"], rname(ends[1]["repo"]),
             ends[1]["role"], a.scope, cap_str(a.cap)), ["all"], {"session_id": d.get("sessionId", "")}, "link" + lid)
@@ -7691,7 +7807,7 @@ def main():
                 others = [e for e in (l["from"], l["to"]) if e["repo"] != repo_of(d.get("cwd") or os.getcwd())[0]]
                 ended = (d["sessionId"], end_act("ended", a.id, l, (others or [l["to"]])[0]), bool(others))
         else:
-            cur, d = l.get("cap", DEFAULT_CAP), own_session() or {}
+            cur, d = l.get("cap", POLICY_DEFAULTS["owner_cap"]), own_session() or {}
             if a.cap < 0:  # not a cap from anyone: a stored -1 would refuse every send
                 sys.exit("switchboard: refused. This command sets link %s's cap to %d, which is not a cap. Nothing was written."
                          % (a.id, a.cap))
@@ -7729,9 +7845,9 @@ def main():
                 age(link_last_activity(l))))
             if l.get("accepted_by"):
                 print("    agent-made: proposed by %s, accepted by %s on %s; ends %s" % (
-                    who_str(l.get("proposed_by") or {}), who_str(l["accepted_by"]), iso(l["accepted"]), iso(l["until"])))
-            elif l.get("until"):
-                print("    ends %s" % iso(l["until"]))
+                    who_str(l.get("proposed_by") or {}), who_str(l["accepted_by"]), iso(l["accepted"]), ends_str(l)))
+            elif l.get("until") or l.get("ends") == NEVER:
+                print("    ends %s" % ends_str(l))
             print("    covers: %s" % covers_str(l))
         props = proposals()
         if props:

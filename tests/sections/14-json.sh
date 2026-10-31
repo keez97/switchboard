@@ -34,7 +34,7 @@ import json,re,sys; j=json.load(open(sys.argv[1])); txt=open(sys.argv[2]).read()
 by={l["id"]:l for l in j["links"]}; a=by[l2]; p=j["proposals"]
 ids=[w for w in re.findall(r"^(l[0-9a-f]+)  ", txt, re.M)]
 ok = (sorted(j)==["links","proposals"] and a["active"] is True and a["cap"]==9 and a["sent_today"]==0 and a["scope"]=="bind test"
-      and re.fullmatch(r"\d{4}-\d\d-\d\d \d\d:\d\d", a["until_iso"]) and ("ends "+a["until_iso"]) in txt
+      and a["until_iso"] is None and a["ends"]=="never" and "    ends never" in txt
       and isinstance(a["last_activity"],int) and re.fullmatch(r"\d{4}-\d\d-\d\d \d\d:\d\d", a["last_activity_iso"])
       and lx not in by and lx not in txt and [x["id"] for x in p]==[lp] and lp in ids and re.fullmatch(r"\d{4}-.*", p[0]["expires_iso"])
       and sorted(by)==sorted(i for i in ids if i!=lp))

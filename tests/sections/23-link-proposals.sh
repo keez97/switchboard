@@ -138,9 +138,9 @@ LT=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/beta:im
 SWITCHBOARD_SESSION_ID=S1 "$B" link --from "$T/beta:implementer" --to "$T/alpha:roadmap" --scope "reverse" --covers "reverse" | has "alpha:roadmap held by this session" && ok "the proposer may hold the --to end" || die "proposer at --to"
 
 # ---- the owner's terminal is unchanged
-LW=$(env -u SWITCHBOARD_SESSION_ID "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "owner work" --covers "owner work" | awk 'NR==1{print $2}'); T1=$(date +%s)
-u=$(L "$LW" .until); [ "$(L "$LW" '.state // "none"')" = none ] && [ "$(L "$LW" .cap)" = 100 ] && [ "$u" -ge $((T1 + 7*86400 - 60)) ] && [ "$u" -le $((T1 + 7*86400 + 5)) ] \
-  && up "$T/beta" S2 "$(peer "$T/sock.$P1" road "owner direction")" | ctx | has "Robin authorised alpha:roadmap on" && ok "a link from the owner's terminal is active at once, 7 days, cap 100, with the owner's header" || die "owner link: $(cat "$SWITCHBOARD_DIR/links/$LW.json")"
+LW=$(env -u SWITCHBOARD_SESSION_ID "$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "owner work" --covers "owner work" | awk 'NR==1{print $2}')
+[ "$(L "$LW" '.state // "none"')" = none ] && [ "$(L "$LW" .cap)" = 100 ] && [ "$(L "$LW" '.ends + " " + (has("until") | tostring)')" = "never false" ] \
+  && up "$T/beta" S2 "$(peer "$T/sock.$P1" road "owner direction")" | ctx | has "Robin authorised alpha:roadmap on" && ok "a link from the owner's terminal is active at once, with no end, cap 100, with the owner's header" || die "owner link: $(cat "$SWITCHBOARD_DIR/links/$LW.json")"
 ev "link $LW created" | has "^1 True .*within: owner work (100 messages a day)$" && ok "the owner's link is still announced to every repo" || die "owner event: $(ev "link $LW created")"
 tcap(){ env -u SWITCHBOARD_SESSION_ID SWITCHBOARD_NOW=$NOW "$B" link-cap "$LW" "$1" >/dev/null; }
 ptu "$T/alpha" S1 >/dev/null; tcap 50; tcap 20; tcap 50
