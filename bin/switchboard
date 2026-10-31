@@ -3641,8 +3641,10 @@ def dropped_line():
             "is dealt with" % (len(names), STATE, ", ".join(names))) if names else ""
 
 
+# not AUTH_PATHS: nothing in this version writes them, so a policy.json or grants/ in the clone is not the owner's and
+# is never committed or pushed
 SYNC_PATHS = ("events", "holds", "registry", "subs", "sessions", "roles", "links", "tasks", "archive", "machines",
-              "defaults.json", ".gitattributes") + AUTH_PATHS
+              "defaults.json", ".gitattributes")
 # the .gitattributes lines a board made before policy lacks: sync appends them (board_attrs)
 NEW_ATTRS = ("policy.json merge=board-record", "grants/** -merge")
 
@@ -4420,9 +4422,10 @@ def remember_process(session, recheck=False):
 
 
 def mark_process(sid):
-    """Make sure pid-<pid>.json of the Claude process this hook runs in exists, has that process's procStart and names
-    sid as its newest session id. A hook in a process already marked for sid reads that one record and writes
-    nothing. A test that asks for no walk has no process to mark. Never raises."""
+    """Make sure pid-<pid>.json of the Claude process this hook runs in exists, has that process's procStart, names
+    sid as its newest session id and names the switchboard version whose hooks run there (old_hooks). A hook in a
+    process already marked so reads that one record and writes nothing. A test that asks for no walk has no process to
+    mark. Never raises."""
     try:
         hp = hook_process()
         ps = proc_start(hp) if hp else ""
@@ -4432,9 +4435,10 @@ def mark_process(sid):
         p = load(pf, None)
         if not isinstance(p, dict) or p.get("procStart") != ps or not isinstance(p.get("sessions"), dict) or not p["sessions"]:
             p = {"pid": hp, "procStart": ps, "sessions": {}}
-        elif max(p["sessions"], key=p["sessions"].get) == sid:
+        elif max(p["sessions"], key=p["sessions"].get) == sid and p.get("version") == plugin_version():
             return  # the hot path: one small read
         p["sessions"][sid] = time.time()  # real time: the newest session id in a process is the one after a clear
+        p["version"] = plugin_version()
         save(pf, p)
     except Exception as e:
         log_error("mark_process", e)
@@ -4570,6 +4574,35 @@ def existing(p):
     while not p.exists() and p.parent != p:
         p = p.parent
     return p
+
+
+def old_hooks():
+    """[(pid, session id, version or None)] for each live Claude process on this machine whose mark names no version,
+    or one before this copy's: a session started before an upgrade keeps the old hooks until /reload-plugins, and a
+    0.7.0 hook closes an owner link with no end after 3 idle days. Reads only; never raises."""
+    out, mine = [], vtuple(plugin_version())
+    for f in sorted(PROCS.glob("pid-*.json")) if PROCS.is_dir() else []:
+        try:
+            p = load(f, None)
+            if not isinstance(p, dict) or not p.get("procStart") or p["procStart"] != proc_start(int(p.get("pid"))):
+                continue
+            v = p.get("version") if isinstance(p.get("version"), str) else None
+            if v is None or vtuple(v) is None or mine and vtuple(v) < mine:
+                ss = p.get("sessions") if isinstance(p.get("sessions"), dict) else {}
+                out.append((int(p["pid"]), max(ss, key=ss.get) if ss else "", v))
+        except Exception as e:
+            log_error("old_hooks", e)
+    return out
+
+
+def old_hooks_line():
+    old = old_hooks()
+    if not old:
+        return ""
+    name = lambda sid: (presence_record(srec_path(MACHINE, sid)) or {}).get("name") or sid or "?"
+    return ("hooks: %d session%s still run%s an older switchboard's hooks: reload them with /reload-plugins: %s" % (
+        len(old), "" if len(old) == 1 else "s", "s" if len(old) == 1 else "", ", ".join(
+            '"%s" (pid %d, %s)' % (name(sid), pid, v or "no version") for pid, sid, v in old)))
 
 
 def warn_hookless(d=None):
@@ -6215,7 +6248,6 @@ OLD_IDLE_DAYS = 3  # a link written before policy (no idle_days) closes after 3 
 NEVER = "never"  # --until never, and a link record's "ends" when it has no end date
 # the until of an agent link with no end: a number, since 0.7.0 compares an agent link's until unguarded (9999-12-31)
 FAR = 253402300799
-_POLICY = [None, None]  # (policy.json's stat, the policy read from it): read once per change, as the guard runs often
 
 
 def policy_ok(k, v):
@@ -6223,21 +6255,19 @@ def policy_ok(k, v):
     return k in POLICY_DEFAULTS and (k in NULLABLE if v is None else type(v) is int and 0 < v <= 10 ** 6)
 
 
+def policy_values(p):
+    """The policy a policy record p gives: its value for each key it holds a good value for (policy_ok), the default
+    for the rest. A record that is not an object, or of a later record format, gives the defaults."""
+    p = p if isinstance(p, dict) and not too_new(p) else {}
+    return {k: p[k] if k in p and policy_ok(k, p[k]) else d for k, d in POLICY_DEFAULTS.items()}
+
+
 def policy():
-    """The link policy: policy.json's value for each key it holds a good value for, the default for the rest. A file
-    that is missing, unreadable, not an object or of a later record format gives the defaults. Never raises."""
-    f = BOARD / "policy.json"
-    try:
-        st = os.stat(f)
-        key = (st.st_mtime_ns, st.st_size, st.st_ino)
-    except OSError:
-        key = None
-    if _POLICY[1] is None or _POLICY[0] != key:
-        p = load(f, {}) if key else {}
-        if not isinstance(p, dict) or too_new(p):
-            p = {}
-        _POLICY[:] = [key, {k: p[k] if k in p and policy_ok(k, p[k]) else d for k, d in POLICY_DEFAULTS.items()}]
-    return dict(_POLICY[1])
+    """The link policy every check and text reads. In this version it is the defaults alone: BOARD/policy.json is not
+    read. Nothing here writes that file and the guard of 0.7.0 does not stop a session writing it, so reading it would
+    let a session set its own limits. 1-03 turns reading on, through policy_values, once `grant policy` is its only
+    writer and machines_behind(1) is empty."""
+    return dict(POLICY_DEFAULTS)
 
 
 def link_until(s, base=None):
@@ -7909,6 +7939,9 @@ def main():
         ml = machines_line()
         if ml:
             print("machines: " + ml)
+        oh = old_hooks_line()
+        if oh:
+            print(oh)
         for k in key_lines():
             print(k)
         print(rename_fix_text(rename_fixes(BOARD, MACHINE), MACHINE), end="")

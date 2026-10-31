@@ -8,17 +8,16 @@ L4=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/gamma:b
 [ "$(jq -r '.ends + " " + (has("until") | tostring) + " " + (.idle_days | tostring)' "$SWITCHBOARD_DIR/links/$L4.json")" = "never false null" ] \
   && ok "a link without --until has no end and no idle close (owner links, D2 and D9)" || die "default end: $(cat "$SWITCHBOARD_DIR/links/$L4.json")"
 jq "del(.ends) | .until = $((NOW - 1))" "$SWITCHBOARD_DIR/links/$L4.json" > "$T/l4" && mv "$T/l4" "$SWITCHBOARD_DIR/links/$L4.json"
-# the links below close after 3 idle days: the policy record gives the owner's links that idle close
-echo '{"v": 1, "owner_idle_days": 3}' > "$SWITCHBOARD_DIR/policy.json"
+# the links below are given idle_days 3 (an owner link has none by default), so they close after 3 idle days
 L5=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/gamma:builder" --scope "idle test" --covers "idle test" --until 30d | awk 'NR==1{print $2}')
-jq ".created = $((NOW - 4*86400))" "$SWITCHBOARD_DIR/links/$L5.json" > "$T/l5" && mv "$T/l5" "$SWITCHBOARD_DIR/links/$L5.json"
+jq ".created = $((NOW - 4*86400)) | .idle_days = 3" "$SWITCHBOARD_DIR/links/$L5.json" > "$T/l5" && mv "$T/l5" "$SWITCHBOARD_DIR/links/$L5.json"
 L6=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/gamma:builder" --scope "active test" --covers "active test" --until 30d | awk 'NR==1{print $2}')
-jq ".created = $((NOW - 4*86400))" "$SWITCHBOARD_DIR/links/$L6.json" > "$T/l6" && mv "$T/l6" "$SWITCHBOARD_DIR/links/$L6.json"
+jq ".created = $((NOW - 4*86400)) | .idle_days = 3" "$SWITCHBOARD_DIR/links/$L6.json" > "$T/l6" && mv "$T/l6" "$SWITCHBOARD_DIR/links/$L6.json"
 echo "{\"ts\": $((NOW - 86400)), \"msg_id\": \"m-l6\", \"text\": \"still talking\"}" >> "$SWITCHBOARD_DIR/links/$L6.log.jsonl"
 # D10: task requests and their transitions between a link's ends are activity; other ends keep L5 idle
 L7=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/gamma:taskee" --scope "task activity test" --covers "task activity test" --until 30d --to-session open | awk 'NR==1{print $2}')
 L8=$(SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/gamma:oldtask" --scope "old task test" --covers "old task test" --until 30d --to-session open | awk 'NR==1{print $2}')
-for l in $L7 $L8; do jq ".created = $((NOW - 4*86400))" "$SWITCHBOARD_DIR/links/$l.json" > "$T/lx" && mv "$T/lx" "$SWITCHBOARD_DIR/links/$l.json"; done
+for l in $L7 $L8; do jq ".created = $((NOW - 4*86400)) | .idle_days = 3" "$SWITCHBOARD_DIR/links/$l.json" > "$T/lx" && mv "$T/lx" "$SWITCHBOARD_DIR/links/$l.json"; done
 T7=$(SWITCHBOARD_NOW=$((NOW - 5*86400)) SWITCHBOARD_SESSION_ID=S5 "$B" task request --to "$T/gamma:taskee" --subject "t7" --key l7 --no-sign | awk '{print $1}')
 (cd "$T/gamma" && SWITCHBOARD_NOW=$((NOW - 86400)) "$B" task working "$T7" >/dev/null)
 SWITCHBOARD_NOW=$((NOW - 4*86400 - 60)) SWITCHBOARD_SESSION_ID=S5 "$B" task request --to "$T/gamma:oldtask" --subject "t8" --key l8 --no-sign >/dev/null
