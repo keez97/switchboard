@@ -141,6 +141,46 @@ for F in "${FIXTURES[@]}"; do
 done
 "$B" links | grep -c "^la0000[123] " | has -x 3 && ok "this CLI lists the same three" || die "t3 this CLI: $("$B" links)"
 
+# t3b: each older CLI's merge driver keeps a no-end owner link's ends and idle_days when the other side changed its cap
+# or closed it (the drivers merge whatever syncs, whichever machine made the record)
+mkdir -p "$T/mu"
+for F in "${FIXTURES[@]}" "$B"; do
+  v=${F##*/switchboard-}; [ "$F" = "$B" ] && v=this
+  python3 - "$T/mu" "$F" <<'PY' && ok "the $v merge driver keeps ends never, idle_days null and no until on a no-end owner link, with a cap change or a close on either side" || die "t3b $v merge"
+import json, os, subprocess, sys
+d, cli = sys.argv[1], sys.argv[2]
+o = {"v": 1, "id": "la00009", "from": {"repo": "a", "role": "x"}, "to": {"repo": "b", "role": "y"}, "scope": "s", "covers": ["s"],
+     "cap": 100, "ends": "never", "idle_days": None, "created": 1793000000, "machine": "east", "by_session": ""}
+capped = dict(o, cap=50)
+closed = dict(o, revoked=1793100000, closed_reason="ended by Robin's terminal", closed_by="terminal")
+ok = True
+for ours, theirs, want in ((capped, o, {"cap": 50}), (o, capped, {"cap": 50}), (o, closed, {"revoked": 1793100000}),
+                           (closed, capped, {"revoked": 1793100000, "cap": 50})):
+    for n, x in (("o", o), (".merge_file_a", ours), ("t", theirs)):
+        json.dump(x, open(os.path.join(d, n), "w"))
+    rc = subprocess.run([cli, "merge-link", "o", ".merge_file_a", "t"], cwd=d, capture_output=True).returncode
+    m = json.load(open(os.path.join(d, ".merge_file_a")))
+    ok = ok and rc == 0 and m.get("ends") == "never" and "idle_days" in m and m["idle_days"] is None and "until" not in m \
+        and m.get("v") == 1 and all(m.get(k) == w for k, w in want.items())
+sys.exit(0 if ok else 1)
+PY
+done
+
+# t3c: how each CLI judges a request over a link whose covers list and scope words differ. 0.7.0 and this one read the
+# covers list; 0.6.0, which has none, reads the scope words (README, "Update every machine on the board the same day")
+LC=$("$B" link --from "$T/alpha:roadmap" --to "$T/beta:implementer" --scope "alpha beta" --covers "gamma work" | awk 'NR==1{print $2}')
+TC=$(cd "$T/alpha" && SWITCHBOARD_SESSION_ID=S1 "$B" task request --to "$T/beta:implementer" --subject "gamma work: x" --key c1 --link "$LC" --no-sign | awk '{print $1}')
+out=$(cd "$T/alpha" && SWITCHBOARD_SESSION_ID=S1 "$B" task request --to "$T/beta:implementer" --subject "alpha: y" --key c2 --link "$LC" --no-sign 2>&1) \
+  && die "t3c this CLI wrote a request its link's covers list does not cover: $out"
+F6=$TESTS/fixtures/switchboard-0.6.0
+TS=$(cd "$T/alpha" && SWITCHBOARD_SESSION_ID=S1 "$F6" task request --to "$T/beta:implementer" --subject "alpha: y" --key c3 --link "$LC" --no-sign 2>&1 | awk '{print $1}')
+[ -n "$TC" ] && [ -n "$TS" ] || die "t3c setup: $TC / $TS"
+verdict(){ "$1" task "$2" --json 2>/dev/null | jq -r '.link.verdict // "none"'; }
+got=""; for F in "${FIXTURES[@]}" "$B"; do v=${F##*/switchboard-}; [ "$F" = "$B" ] && v=this; got="$got $v:$(verdict "$F" "$TC")/$(verdict "$F" "$TS")"; done
+[ "$got" = " 0.6.0:scope does not name the subject/ok 0.7.0:ok/covers list does not name the subject this:ok/covers list does not name the subject" ] \
+  && ok "0.6.0 judges a v1 link by its scope words (a request the covers list names is not covered there, one only the scope words name is); 0.7.0 and this CLI by its covers list" \
+  || die "t3c verdicts:$got"
+
 # t4: an older CLI's hourly sync drops the version; the next run of this one puts it back, and never lowers one
 for F in "${FIXTURES[@]}"; do
   v=${F##*/switchboard-}
