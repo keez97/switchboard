@@ -61,10 +61,6 @@ notes "$M" main; notes "$B" branch
 python3 - "$T/notes-main" "$T/notes-branch" "$TQ" "$LP" <<'PY' && ok "on a live machine's setup the notes are main's: session start (task, proposal, hold), hold and link refusals, a peer's message; every CLI path is ~/.claude/board, each note begins switchboard" || die "notes differ from main's: $(diff "$T/notes-main" "$T/notes-branch" | head -20)"
 import json, re, sys
 m, b, tq, lp = open(sys.argv[1]).read(), open(sys.argv[2]).read(), sys.argv[3], sys.argv[4]
-cov = " It covers tasks whose subject starts with: eq scope."  # 0.7.0's proposal note names the covers list; main's has none
-b = b.replace(cov, "") if b.count(cov) == 1 else "no covers sentence"
-acc = "Accept only if the scope and the covers list fit"  # and asks the acceptor to check both
-b = b.replace(acc, "Accept only if the scope fits") if b.count(acc) == 1 else "no covers check"
 as_branch = lambda t: re.sub(r"agent-board(?=: | hold | skill )", "switchboard", t)  # main's prefix as this copy's
 unprefixed = lambda t: re.sub(r"switchboard(?=: | hold | skill )", "", t)
 texts = [json.loads(x) for x in b.split("\n") if x.strip()]
@@ -344,7 +340,7 @@ refusal S2 | jq -r .tool | has -x switchboard && ok "a refusal the CLI records n
 # ---- 10. SWITCHBOARD_ switches: OFF, SESSIONS_DIR, NOSYNC
 W='{"file_path":"'"$T/beta/src/y.py"'","content":"x"}'; "$B" hold "$T/beta/src" --until 1h --reason "env" >/dev/null
 hook PreToolUse "$T/beta" S2 Write "$W" | has '"deny"' && [ -z "$(SWITCHBOARD_OFF=1 hook PreToolUse "$T/beta" S2 Write "$W")" ] \
-  && [ -z "$(env -u AGENT_BOARD_ALLOW_TMP AGENT_BOARD_OFF=1 hook PreToolUse "$T/beta" S2 Write "$W")" ] \
+  && [ -z "$(unset AGENT_BOARD_ALLOW_TMP; AGENT_BOARD_OFF=1 hook PreToolUse "$T/beta" S2 Write "$W")" ] \
   && ok "SWITCHBOARD_OFF switches the hooks off, as its older name AGENT_BOARD_OFF does" || die "OFF"
 P9=$(fake S9 "$T/alpha" alt); mkdir -p "$T/alt-sessions"; mv "$HOME/.claude/sessions/$P9.json" "$T/alt-sessions/"
 (cd "$T/alpha" && SWITCHBOARD_SESSION_ID=S9 "$B" me | has "^terminal ") && (cd "$T/alpha" && SWITCHBOARD_SESSIONS_DIR="$T/alt-sessions" SWITCHBOARD_SESSION_ID=S9 "$B" me | has "^session S9 ") \
