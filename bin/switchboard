@@ -4314,11 +4314,13 @@ def state_fault():
 
 def session_file(sid=None, pid=None):
     """Claude Code's own record for a running session on this machine, validated. None when missing, unusable or in
-    a format this code does not know."""
+    a format this code does not know. By session id, the file of a running process comes first: the desktop app
+    reopens a session in a new process, and the file of the process it left can stay behind with the same id."""
     try:
         files = list(SESS_DIR.glob("*.json"))
     except Exception:
         return None
+    stale = []
     for f in files:
         d = load(f, None)
         if not isinstance(d, dict) or (sid and d.get("sessionId") != sid) or (pid and str(d.get("pid")) != str(pid)):
@@ -4328,8 +4330,11 @@ def session_file(sid=None, pid=None):
             and text("sessionId") and text("messagingSocketPath") and isinstance(d.get("procStart"), (str, int)) \
             and str(d.get("procStart")).strip() and all(isinstance(d.get(k) or "", str) for k in
                                                         ("name", "cwd", "bridgeSessionId", "hostSessionId"))
-        return d if known else None
-    return None
+        d = d if known else None
+        if pid or d and proc_start(d["pid"]) == " ".join(str(d["procStart"]).split()):
+            return d
+        stale.append(d)
+    return stale[0] if stale else None
 
 
 def adapter_fields(d):
@@ -4763,8 +4768,9 @@ def address(rec):
 
 
 def by_address(addr):
+    """The session at a push address, or at its app session id: the desktop app's own sends arrive from="local_..."."""
     for r in live_sessions() + remote_sessions(0):
-        if addr in ("uds:" + (r.get("uds") or "-"), "bridge:" + (r.get("bridge") or "-")):
+        if addr in ("uds:" + (r.get("uds") or "-"), "bridge:" + (r.get("bridge") or "-"), r.get("host") or "-"):
             return r
     return None
 

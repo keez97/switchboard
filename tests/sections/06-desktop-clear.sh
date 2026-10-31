@@ -21,5 +21,18 @@ PN=$(fake SN1 "$T/kappa" plain); sstart "$T/kappa" SN1 >/dev/null
 SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/kappa:maker" --scope "no host test" --covers "no host test" >/dev/null
 send_end "$T/kappa" SN1 other; kill $PN; wait $PN 2>/dev/null || true
 seat SN2 "$T/kappa" plain; sstart "$T/kappa" SN2 | has "open end maker" && "$B" who "$T/kappa" --role maker | has "no live session" && ok "a missing app session id never matches a missing one" || die "empty host matched"
+# the desktop app reopens a session in a new process, and the file of the process it left can stay behind with the
+# same session id. Stale files on both sides of the live one: some come first whatever order the directory lists
+mkrepo "$T/mu"; "$B" register "$T/mu" >/dev/null
+gone(){ kill "$1"; until [ -z "$("$B" _procstart "$1")" ]; do :; done; }
+for _ in 1 2 3; do gone "$(fake SM1 "$T/mu" "mu desk" 1 local_hostM)"; done
+PM=$(fake SM1 "$T/mu" "mu desk" 1 local_hostM)
+for _ in 1 2 3; do gone "$(fake SM1 "$T/mu" "mu desk" 1 local_hostM)"; done
+sstart "$T/mu" SM1 >/dev/null
+"$B" who "$T/mu" | has "sock.$PM" && ok "a session file the session's earlier process left does not hide the running process" || die "live desktop session not listed beside a stale file of its session id"
+SWITCHBOARD_SESSION_ID=S5 "$B" link --from "$T/delta:lead" --to "$T/mu:desk" --scope "twin test" --covers "twin test" >/dev/null 2>&1 || die "link to the live desktop session refused"
+up "$T/mu" SM1 "next turn" >/dev/null; up "$T/mu" SM1 "and the next" >/dev/null
+"$B" who "$T/mu" --role desk | has "sock.$PM" && ! grep -lq "desk is open" "$SWITCHBOARD_DIR"/events/*.json && ok "its end stays bound across turns" || die "desk end opened or unbound across turns"
+up "$T/delta" S5 "$(printf '<cross-session-message from="local_hostM" from-name="mu desk">\ndone\n</cross-session-message>')" | has "linked counterpart" && ok "a message from the app session id (the desktop app's own send) is matched to its link" || die "local_ sender not matched to its link"
 
 finish
