@@ -3777,9 +3777,11 @@ def plugin_version():
 
 
 def vtuple(v):
-    """A version's leading numbers as a tuple to compare ("0.8.0" -> (0, 8, 0)); None for anything else."""
+    """A version's leading numbers as a tuple to compare ("0.8.0" -> (0, 8, 0)); None for anything else, a part of
+    more than 9 digits too (int() of a long enough one raises, which would stop every sync pass)."""
     m = re.match(r"\d+(?:\.\d+)*", v) if isinstance(v, str) else None
-    return tuple(int(x) for x in m.group().split(".")) if m else None
+    parts = m.group().split(".") if m else []
+    return tuple(int(x) for x in parts) if parts and all(len(x) <= 9 for x in parts) else None
 
 
 def stamp_machine():
@@ -5302,7 +5304,7 @@ def link_check(req, reader=None, d=None, timeout=20):
     ends = [e if isinstance(e, dict) else {} for e in (l.get("from"), l.get("to"))]
     by, at = agent_seat(l, ends[0]), agent_seat(l, ends[1])
     rs = req.get("seat")
-    out["verdict"] = ("link of record format %s, newer than this switchboard reads" % l["v"] if too_new(l) else
+    out["verdict"] = ("link of " + newer_str(l) if too_new(l) else
                       "link proposed, not accepted" if l.get("state") == "proposed" and not l.get("revoked") else
                       "link revoked" if l.get("revoked") else
                       "link expired" if l.get("until") and l["until"] <= now() else
@@ -5590,7 +5592,7 @@ def task_request(a):
         ends = [e if isinstance(e, dict) else {} for e in (l.get("from"), l.get("to"))]
         scope = str(l.get("scope") or "")
         if not is_active(l):
-            why = ("it is of record format %s, newer than this switchboard reads" % l["v"] if too_new(l) else
+            why = ("it is of " + newer_str(l) if too_new(l) else
                    "it is expired, revoked or a proposal not yet accepted")
         elif (end_pair(l.get("from")), end_pair(l.get("to"))) != (end_pair(requester), end_pair(worker)):
             why = "it runs from %s to %s, and this request is from %s to %s" % (
@@ -6175,8 +6177,27 @@ RECORD_MIN_VERSION = {1: "0.8.0"}
 
 
 def too_new(l):
-    """A record of a later format than RECORD_V (an int "v" above it)."""
-    return isinstance(l, dict) and type(l.get("v")) is int and l["v"] > RECORD_V
+    """A record of a format this copy does not read: "v" present and anything but an int from 1 to RECORD_V (a bool,
+    a string, a float, null all count). A record with no "v" is from before formats, which this copy reads."""
+    return isinstance(l, dict) and "v" in l and not (type(l["v"]) is int and 1 <= l["v"] <= RECORD_V)
+
+
+def newer_str(l):
+    return "record format %r, newer than this switchboard reads" % (l.get("v"),)
+
+
+def link_for_change(f, lid, what):
+    """The link record at f for unlink, link-cap or bind to change. Exits with the reason and writes nothing when there
+    is none, it is of a format this copy does not read, or its id and ends are not of the shape this copy writes."""
+    l = load(f, None) or sys.exit("switchboard: no link %s" % lid)
+    if too_new(l):
+        sys.exit("switchboard: refused. Link %s is of %s (this one is %s): %s it from a newer one. Nothing was "
+                 "written." % (lid, newer_str(l), plugin_version() or "version unknown", what))
+    end = lambda e: isinstance(e, dict) and isinstance(e.get("repo"), str) and isinstance(e.get("role"), str)
+    if not isinstance(l, dict) or l.get("id") != lid or not end(l.get("from")) or not end(l.get("to")):
+        sys.exit("switchboard: link %s is not a record this switchboard can read (it needs its id, and from and to "
+                 "each with a repo and a role). Nothing was written." % lid)
+    return l
 
 
 def cap_str(cap, unit="messages a day"):
@@ -6314,8 +6335,8 @@ def links(active=True):
     for f in (BOARD / "links").glob("*.json"):
         l = load(f, None)
         if too_new(l):
-            bad_record(f, "record format %d, and this switchboard (%s) reads format %d and older: no authority here"
-                       % (l["v"], plugin_version() or "version unknown", RECORD_V))
+            bad_record(f, "%s (this one is %s, format %d): no authority here" % (
+                newer_str(l), plugin_version() or "version unknown", RECORD_V))
         elif l:
             out.append(l)
     return [l for l in out if not active or is_active(l)]
@@ -6415,8 +6436,8 @@ def link_answer(a):
         sys.exit("switchboard: proposal %s expired unanswered at %s. Nothing was written; its proposer may propose again."
                  % (a.lid, iso(l["expires"])))
     if a.what == "accept" and too_new(l):
-        sys.exit("switchboard: proposal %s is of record format %s, newer than this switchboard (%s) reads: accept it "
-                 "from a newer one. Nothing was written." % (a.lid, l["v"], plugin_version() or "version unknown"))
+        sys.exit("switchboard: proposal %s is of %s (this one is %s): accept it from a newer one. Nothing was "
+                 "written." % (a.lid, newer_str(l), plugin_version() or "version unknown"))
     if a.what == "accept" and covers_of(l) == COVERS_NONE:
         sys.exit("switchboard: proposal %s has no covers list (made by an older switchboard): propose again with "
                  "--covers. Nothing was written." % a.lid)
@@ -7636,7 +7657,7 @@ def main():
                 "open: binds to a session titled with @%s, or offered to the next session there" % end["role"]))
         sync(pull=False)
     elif a.cmd == "bind":
-        l = load(BOARD / "links" / (a.id + ".json"), None) or sys.exit("switchboard: no link %s" % a.id)
+        l = link_for_change(BOARD / "links" / (a.id + ".json"), a.id, "bind")
         if agent_caller(own_session()):
             sys.exit("switchboard: refused. Moving a link's end to another session is %s's, from a terminal. Nothing was "
                      "written. A session takes an open end with `%s role <label>`." % (OWNER, CLI_NAME))
@@ -7648,7 +7669,7 @@ def main():
         print('%s:%s bound to "%s" to=%s' % (rname(end["repo"]), a.label, r.get("name", ""), address(r) or "-"))
     elif a.cmd in ("unlink", "link-cap"):
         f = BOARD / "links" / (a.id + ".json")
-        l = load(f, None) or sys.exit("switchboard: no link %s" % a.id)
+        l = link_for_change(f, a.id, "end" if a.cmd == "unlink" else "change its cap")
         if a.cmd == "unlink":
             d, rec = own_session() or {}, {}
             if d:
