@@ -166,7 +166,7 @@ switchboard links
 switchboard unlink l5c2a1e
 ```
 
-A link two sessions make runs at most 24 hours from acceptance and closes when either session leaves its end. From your own terminal, `switchboard link` is active at once for 7 days, and you can set a longer end or a daily message cap.
+A link two sessions make runs at most 24 hours from acceptance and closes when either session leaves its end. From your own terminal, `switchboard link` is active at once with no end date and no idle close, and you can set an end with `--until` or a daily message cap with `--cap`.
 
 `switchboard links` shows when each link ends on a second line and its covers list on the next. `switchboard links --json` prints the same links and proposals as JSON, with the sends so far today and the last activity.
 
@@ -190,6 +190,12 @@ Finish or request again the old link's open tasks before `unlink`: after it they
 A link two sessions made carries the covers list the accepting session was shown. A session on 0.6.0 accepts seeing only the scope, so the tasks of a link it accepted need both the list and the whole words of the scope. A session on 0.7.0 cannot accept a proposal made on 0.6.0, which has no list. Its proposer updates to 0.7.0 first, since 0.6.0 has no `--covers`, then proposes again with it.
 
 Update every machine on the board the same day: until all of them run 0.7.0, a 0.6.0 machine judges a link by its scope and can reach a different verdict on the same task.
+
+### Upgrading to 0.8.0
+
+0.8.0 changes what an owner link is: one made from your terminal has no end date and no idle close unless you give it `--until`. A link two sessions make still runs 24 hours and closes after 3 idle days, and a session asking for longer, or for `--until never`, is refused. Each machine's `machines/<name>.json` now records the switchboard version it runs, and link records carry a format number.
+
+After updating, run `/reload-plugins` in every open session. A session still on 0.7.0 hooks closes a 0.8.0 owner link after 3 idle days, and when it starts or compacts it points `~/.local/bin/switchboard` back at 0.7.0. `switchboard status`, run from the 0.8.0 copy, names any session still on older hooks (`hooks:`) and any CLI link at an older copy (`cli:`). Update every machine on the board. A machine still on 0.6.0 or 0.7.0 reads 0.8.0's records, but the links it makes keep its old rules (7 days, 3 idle days) until it updates.
 
 ## Workers
 
