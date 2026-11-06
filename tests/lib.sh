@@ -13,6 +13,9 @@ T="$(cd "$(mktemp -d)" && pwd -P)"
 for v in MACHINE DIR STATE OWNER ALLOW_TMP NOW SESSION_ID TEST_PROPOSE SESSIONS_DIR NOSYNC NOSCAN OFF PULL_EVERY NOWALK \
   GUARD_BUDGET WAIT_TIMEOUT; do unset "SWITCHBOARD_$v" "AGENT_BOARD_$v"; done
 unset SWITCHBOARD_SCAN SWITCHBOARD_SHARED SWITCHBOARD_SCOPE_IDS SWITCHBOARD_SKIP XDG_CONFIG_HOME
+# nor the names a Claude session sets, which make an owner act from no session refused off a test board (D19): the
+# suite runs as from a terminal wherever it is started
+unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT
 # the per-user fallback dir (errors when the state dir is unwritable, the config file's notice mark) under TMPDIR
 export TMPDIR="$T/tmp"; mkdir -p "$TMPDIR"
 export HOME="$T/home" SWITCHBOARD_DIR="$T/board" SWITCHBOARD_STATE="$T/state" SWITCHBOARD_NOSYNC=1 SWITCHBOARD_NOSCAN=1 SWITCHBOARD_ALLOW_TMP=1 SWITCHBOARD_MACHINE=east
@@ -24,6 +27,9 @@ export SWITCHBOARD_NOWALK=1
 # an uncaught exception in any board run (a hook, a CLI call inside a negated check) is written here by
 # tests/py/sitecustomize.py, and finish fails the section on it: a crash never passes as "no output"
 export SWITCHBOARD_CRASHLOG="$T/crashes" PYTHONPATH="$TESTS/py${PYTHONPATH:+:$PYTHONPATH}"
+# a stand-in passwd home (tests/py/sitecustomize.py): off a test board the CLI also reads session files, process
+# records and the config file in the passwd home (D16, D19), and a section never reads this machine's own
+export SWITCHBOARD_TEST_PWHOME="$T/pwhome"
 mkdir -p "$HOME/.claude/sessions" "$SWITCHBOARD_DIR"; echo '{"enabledPlugins":{"a":true}}' > "$HOME/.claude/settings.json"
 # no config file: the fields no variable sets take the defaults; 35-config.sh checks the config file
 # a board folder's own files (.gitattributes, .gitignore, defaults.json), as `switchboard init` writes them; init itself

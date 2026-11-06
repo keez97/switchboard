@@ -82,4 +82,36 @@ for c in "env 'SWITCHBOARD_ALLOW_TMP=1' 'SWITCHBOARD_SESSION_ID=V1' 'XDG_CONFIG_
   pre_cmd "$c" | has '"permissionDecision": "deny"' && ok "V3-1: denied: ${c:0:70}" || die "V3-1 allowed: $c"
 done
 pre_cmd "switchboard link --from alpha:x --to beta:y --scope 'what NOW means' --covers ab" | has deny && die "a scope with a plain word is refused" || ok "a link with ordinary quoted words is still allowed"
+
+# D19: no session found is the owner's terminal only with no Claude Code process above the call. The stand-in engine is
+# a copy of sh where the desktop app keeps its engine in the passwd home; -c '...; true' keeps sh from exec'ing the CLI
+ENG="$PW/.claude/remote/ccd-cli/9.9.9"; mkdir -p "$(dirname "$ENG")"; cp /bin/sh "$ENG"
+LK(){ echo "link --from $T/alpha:roadmap --to $T/beta:implementer --scope $1 --covers $1"; }
+snap(){ find "$CB/links" "$CB/events" -type f 2>/dev/null | sort | xargs cat 2>/dev/null | sha256sum; }
+s0=$(snap); out=$($LIVE "$ENG" -c "\"$B\" $(LK d19a) 2>&1; true")
+echo "$out" | has "runs under a Claude Code process" && [ "$(snap)" = "$s0" ] && ok "D19: an owner link from no session under the desktop engine is refused, nothing written" || die "D19 engine: $out"
+out=$($LIVE /bin/sh -c "\"$B\" $(LK d19b) 2>&1; true"); L=$(echo "$out" | sed -n 's/^link \(l[0-9a-f]*\) created$/\1/p')
+[ -n "$L" ] && ok "D19: the same from a plain sh is the owner's terminal: link $L active" || die "D19 plain sh: $out"
+s0=$(snap); out=$($LIVE CLAUDECODE=1 "$B" $(LK d19c) 2>&1 || true)
+echo "$out" | has "runs under a Claude Code process" && [ "$(snap)" = "$s0" ] && ok "D19: CLAUDECODE=1 with no Claude above refuses it too" || die "D19 CLAUDECODE: $out"
+s0=$(snap); out=$($LIVE CLAUDE_CODE_ENTRYPOINT=cli "$B" $(LK d19d) 2>&1 || true)
+echo "$out" | has "runs under a Claude Code process" && [ "$(snap)" = "$s0" ] && ok "D19: and CLAUDE_CODE_ENTRYPOINT" || die "D19 ENTRYPOINT: $out"
+# the other owner acts, under the engine: bind, ending a link no session here holds, raising or removing a cap, decline
+P=$(python3 -c "import json,glob,sys; print([json.load(open(f))['id'] for f in glob.glob(sys.argv[1]+'/links/*.json') if json.load(open(f)).get('state')=='proposed'][0])" "$CB")
+for c in "bind $L implementer --session open" "unlink $L" "link-cap $L 0" "link-cap $L 999" "link decline $P"; do
+  s0=$(snap); out=$($LIVE "$ENG" -c "\"$B\" $c 2>&1; true")
+  echo "$out" | has "runs under a Claude Code process" && [ "$(snap)" = "$s0" ] && ok "D19: $c under the engine is refused" || die "D19 $c: $out"
+done
+s0=$(snap); out=$($LIVE "$ENG" -c "\"$B\" link-cap $L 3 2>&1; true")
+echo "$out" | has -x ok && ok "D19: lowering a cap stays open, as for a session" || die "D19 lower cap: $out"
+# the engine is judged in the passwd home, never HOME: the same copy in HOME is no Claude install
+mkdir -p "$HOME/.claude/remote/ccd-cli"; cp /bin/sh "$HOME/.claude/remote/ccd-cli/9.9.9"
+out=$($LIVE "$HOME/.claude/remote/ccd-cli/9.9.9" -c "\"$B\" unlink $L 2>&1; true")
+echo "$out" | has -x ok && ok "D19: a copy under HOME, not the passwd home, is no engine: the owner ends link $L" || die "D19 HOME copy: $out"
+# the round 4 route: a session that moves HOME (and STATE with it) from a sourced file is found by its file in the
+# passwd home, and gets a session's rules: a proposal, never an owner link
+mkdir -p "$PW/.claude/sessions"; cp "$HOME/.claude/sessions/$W.json" "$PW/.claude/sessions/"
+printf 'SWITCHBOARD_TEST_PWHOME=%s\nHOME=%s\nSWITCHBOARD_DIR=%s\n' "$PW" "$T/empty" "$CB" > "$T/home.env"
+n0=$(active); out=$(under W "$T/alpha" "unset SWITCHBOARD_STATE; set -a; . $T/home.env; set +a; \"$B\" $(LK d19e) 2>&1" || true)
+echo "$out" | has "proposed" && [ "$(active)" = "$n0" ] && ok "D19: HOME moved from a sourced file: the session is found in the passwd home and proposes" || die "D19 HOME moved: $out"
 finish

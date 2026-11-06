@@ -179,18 +179,29 @@ XARGS_READS = {"grep", "cat", "wc", "head", "tail", "echo", "ls", "stat", "du", 
 BOARD = Path(setting("board_dir", HOME / ".local/share/switchboard", "DIR", old=True))
 
 
+def pw_home():
+    """The passwd home of this user: no variable moves it, as HOME moves TEMP_PREFIXES' Library and the defaults."""
+    return pwd.getpwuid(os.getuid()).pw_dir
+
+
+def pw_setting(key):
+    """A field of the passwd home's config file, a string or ''. XDG_CONFIG_HOME and HOME, which pick CONFIG_FILE, do
+    not move it."""
+    try:
+        live = json.loads((Path(pw_home()) / ".config/switchboard/config.json").read_text())
+        return os.path.expanduser(live[key]) if isinstance(live, dict) and isinstance(live.get(key), str) else ""
+    except Exception:
+        return ""
+
+
 def _test_board():
     if not board_env("ALLOW_TMP"):
         return False
-    home = pwd.getpwuid(os.getuid()).pw_dir  # no variable moves it, as HOME moves TEMP_PREFIXES' Library
+    home = pw_home()
     real = os.path.realpath(BOARD)
     if not (real + "/").startswith(TEMP_PREFIXES[:-1] + (home + "/Library/",)):
         return False
-    try:  # the passwd home's config file: XDG_CONFIG_HOME and HOME, which pick CONFIG_FILE, do not move it
-        live = json.loads((Path(home) / ".config/switchboard/config.json").read_text())
-        live = os.path.expanduser(live["board_dir"]) if isinstance(live, dict) and isinstance(live.get("board_dir"), str) else ""
-    except Exception:
-        live = ""
+    live = pw_setting("board_dir")
     if not live:
         return True
     try:
@@ -3404,7 +3415,7 @@ def init(a):
     # board this same run made from an absent or empty folder, with no remote to carry it, and only from a terminal.
     # The session check is an extra: a process that leaves the tree (setsid, nohup, a double fork) looks like a
     # terminal, so it decides nothing on its own
-    session = not a.join and line and agent_caller(own_session())
+    session = not a.join and line and (agent_caller(own_session()) or claude_ancestor())
     mine = fresh and made and not a.join and not has_remote(b) and not session
     if not key:
         signers = "not set: %s. Requests from this machine go unsigned" % pub
@@ -4114,6 +4125,9 @@ def session_record(session):
 # ---------- presence, roles, links, messaging ----------
 
 SESS_DIR = Path(test_board() and board_env("SESSIONS_DIR") or HOME / ".claude/sessions")  # the variable: tests only
+# off a test board a session that moves HOME is still found (D19): the passwd home's session files are read first,
+# then the ones HOME names. Read only
+SESS_DIRS = list(dict.fromkeys(([] if test_board() else [Path(pw_home()) / ".claude/sessions"]) + [SESS_DIR]))
 PAIR_WINDOW, PAIR_LIMIT, WAKE_WINDOW, REMOTE_SHOWN_DAYS = 1800, 3, 1800, 3
 REFUSE_WINDOW, NAME_STOP = 1800, {"board", "switchboard", "main", "master", "README.md", "tests"}
 WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
@@ -4360,7 +4374,7 @@ def session_file(sid=None, pid=None):
     a format this code does not know. By session id, the file of a running process comes first: the desktop app
     reopens a session in a new process, and the file of the process it left can stay behind with the same id."""
     try:
-        files = list(SESS_DIR.glob("*.json"))
+        files = [f for sd in SESS_DIRS for f in sd.glob("*.json")]
     except Exception:
         return None
     stale = []
@@ -4397,6 +4411,10 @@ def adapter_fields(d):
 
 WRAPPERS = {"sh", "bash", "dash", "zsh", "ksh", "mksh", "fish", "env", "timeout", "nice", "nohup", "stdbuf", "time"}
 PROCS = STATE / "claude"
+# the records claude_session reads: off a test board the passwd home's state dir first (its config file's state_dir,
+# else the default), so a session that moves HOME, and with it STATE, is still found (D19). Read only: hooks write PROCS
+PROC_DIRS = list(dict.fromkeys(([] if test_board() else [
+    Path(pw_setting("state_dir") or Path(pw_home()) / ".local/state/switchboard") / "claude"]) + [PROCS]))
 
 
 def parent(pid):
@@ -4533,6 +4551,15 @@ def _remember_session(session, sid, recheck):
         return None
 
 
+def proc_record(name):
+    """A hooks' record by file name: the first of PROC_DIRS that has it as a dict, else None."""
+    for pd in PROC_DIRS:
+        r = load(pd / name, None)
+        if isinstance(r, dict):
+            return r
+    return None
+
+
 def claude_session(sid=None, pid=None):
     """A running Claude session on this machine, by session id or by process: {sessionId, pid, procStart, cwd, name,
     uds, bridge, host}, the last four from the adapter and '' without it. None when neither the hooks' record nor the
@@ -4544,10 +4571,10 @@ def claude_session(sid=None, pid=None):
         if d:
             sid = d["sessionId"]
         elif pid:  # no file: the newest session id the hooks recorded in this process
-            p = load(PROCS / ("pid-%d.json" % int(pid)), None)
+            p = proc_record("pid-%d.json" % int(pid))
             if isinstance(p, dict) and p.get("sessions") and p.get("procStart") == proc_start(pid):
                 sid, own = max(p["sessions"], key=p["sessions"].get), (int(pid), p["procStart"])
-        rec = load(PROCS / (slug(sid) + ".json"), None) if sid else None
+        rec = proc_record(slug(sid) + ".json") if sid else None
         rec = rec if isinstance(rec, dict) and rec.get("pid") else None
         cwd = (d or {}).get("cwd") or (rec or {}).get("cwd") or ""  # one session id, one cwd, in either process
         if rec and (d and d["pid"] != rec.get("pid") or own and own[0] != rec.get("pid")):
@@ -4603,6 +4630,62 @@ def own_session():
             return d
         pid = parent(pid)[0]
     return None
+
+
+CLAUDE_ARGV = ("@anthropic-ai/claude-code", "claude-code/cli.js")  # Claude Code from npm, run by node
+_ANCESTOR = []
+
+
+def exe_of(pid):
+    """The executable of a running process, or ''. /proc on Linux; ps's comm, the full path, on macOS."""
+    try:
+        if platform.system() == "Linux":
+            e = os.readlink("/proc/%d/exe" % int(pid))
+            return e[:-len(" (deleted)")] if e.endswith(" (deleted)") else e
+        r = subprocess.run(["ps", "-o", "comm=", "-p", str(int(pid))], capture_output=True, text=True, timeout=3)
+        return r.stdout.strip()
+    except Exception:
+        return ""
+
+
+def _claude_ancestor():
+    if "CLAUDECODE" in os.environ or "CLAUDE_CODE_ENTRYPOINT" in os.environ:
+        return True
+    home = os.path.realpath(pw_home())
+    installs = (home + "/.claude/remote/ccd-cli/", home + "/.local/share/claude/versions/")
+    pid = os.getppid()
+    for _ in range(64):
+        if pid <= 1:
+            return False
+        exe, argv = exe_of(pid), argv_of(pid)
+        if exe.startswith(installs) or os.path.basename(exe) == "claude" or \
+                any(n in x for x in argv for n in CLAUDE_ARGV) or \
+                exe.startswith(home + "/.claude/remote/srv/") and os.path.basename(exe) == "server" and "--serve" in argv:
+            return True
+        pid = parent(pid)[0]
+    return False
+
+
+def claude_ancestor():
+    """True when this call runs under a Claude Code process (D19), judged by what a child cannot change: an ancestor's
+    executable is one of the passwd home's Claude installs (the desktop app's engine in .claude/remote/ccd-cli/, the
+    native CLI in .local/share/claude/versions/) or is named claude, its argv names Claude Code's npm package, or it
+    is the desktop app's server (.claude/remote/srv/*/server --serve). CLAUDECODE or CLAUDE_CODE_ENTRYPOINT in the
+    environment counts too, though a session can unset them. own_session() finding no session is then no proof of the
+    owner's terminal: a session that moved HOME, or whose records are gone, finds none. False on a test board, whose
+    suite itself runs under Claude sessions. A process that left the tree (setsid, tmux new -d) has no Claude above it
+    and still reads as a terminal (D12, 0.8.3). Computed once per process."""
+    if not _ANCESTOR:
+        _ANCESTOR.append(not test_board() and _claude_ancestor())
+    return _ANCESTOR[0]
+
+
+def owner_terminal(what):
+    """For an owner act from no session: exits with the reason when a Claude Code process runs it (claude_ancestor)."""
+    if claude_ancestor():
+        sys.exit("switchboard: refused. This command runs under a Claude Code process whose session switchboard could not "
+                 "find, so it is not %s's terminal. %s is %s's, from a terminal of %s's own. Nothing was written."
+                 % (OWNER, what, OWNER, OWNER))
 
 
 def argv_of(pid):
@@ -4666,7 +4749,7 @@ def warn_hookless(d=None):
     if not d:
         return
     try:
-        p = load(PROCS / ("pid-%d.json" % int(d["pid"])), None)
+        p = proc_record("pid-%d.json" % int(d["pid"]))
         # by process, not by session id: another process of the same session id (an earlier one the desktop app
         # reopened it from, or one that runs it at the same time) says nothing about this one; a record for a pid that
         # now runs another process neither
@@ -6640,6 +6723,8 @@ def link_answer(a):
     if not d and accept:
         why = ("switchboard: refused. Only the session holding %s accepts proposal %s; a terminal does not. Nothing was "
                "written. %s makes a link from a terminal with `%s link`." % (addr, a.lid, OWNER, CLI_NAME))
+    elif not d:
+        owner_terminal("Declining a proposal for an end no session here holds")
     elif d:
         rid = repo_of(d.get("cwd") or os.getcwd())[0]
         rec = publish({"session_id": d["sessionId"], "repo": rid, "cwd": d.get("cwd", "")}, ident=d) or sys.exit("switchboard: no presence")
@@ -7882,6 +7967,8 @@ def main():
         d = own_session() or {}
         if agent_caller(d):
             return link_propose(a, ends, d)
+        if not d:
+            owner_terminal("Making a link, active at once,")
         pol = policy()
         a.cap = pol["owner_cap"] if a.cap is None else a.cap
         if a.cap < 0:
@@ -7930,9 +8017,12 @@ def main():
         sync(pull=False)
     elif a.cmd == "bind":
         l = link_for_change(BOARD / "links" / (a.id + ".json"), a.id, "bind")
-        if agent_caller(own_session()):
+        d = own_session()
+        if agent_caller(d):
             sys.exit("switchboard: refused. Moving a link's end to another session is %s's, from a terminal. Nothing was "
                      "written. A session takes an open end with `%s role <label>`." % (OWNER, CLI_NAME))
+        if not d:
+            owner_terminal("Moving a link's end to another session")
         end = ([e for e in (l["from"], l["to"]) if e["role"] == a.label] or [None])[0] or sys.exit(
             "switchboard: link %s has no end %s" % (a.id, a.label))
         r, _ = pick(end, None, a.session)
@@ -7954,6 +8044,8 @@ def main():
                            a.id, link_ends(l), OWNER))
                 refuse(d["sessionId"], "switchboard", "link " + a.id, why, "cli")
                 sys.exit(why)
+            if not d:
+                owner_terminal("Ending a link from no session")
             # the reason names who ended it, as a decline does
             who = (who_str(seat_record(rec, held[0])) if held else
                    'session "%s" on %s' % (rec.get("name") or d.get("name", ""), MACHINE) if d else "%s's terminal" % OWNER)
@@ -7967,11 +8059,14 @@ def main():
             if a.cap < 0:  # not a cap from anyone: a stored -1 would refuse every send
                 sys.exit("switchboard: refused. This command sets link %s's cap to %d, which is not a cap. Nothing was written."
                          % (a.id, a.cap))
-            if agent_caller(d) and cur and (not a.cap or a.cap > cur):
+            if (agent_caller(d) or not d) and cur and (not a.cap or a.cap > cur):
                 what = ("Removing link %s's cap (%s a day now)" % (a.id, cur) if not a.cap else
                         "Raising link %s's cap (%s a day now)" % (a.id, cur))
-                sys.exit("switchboard: refused. %s is %s's, from a terminal. A session may lower it. Nothing was written."
-                         % (what, OWNER))
+                if not d:
+                    owner_terminal(what)
+                else:
+                    sys.exit("switchboard: refused. %s is %s's, from a terminal. A session may lower it. Nothing was "
+                             "written." % (what, OWNER))
             l["cap"] = a.cap
             save(f, l)
             # the session that set it is not told of its own act
