@@ -23,6 +23,7 @@ Twins: every command that runs the CLI by a board name gets a twin with the swit
 | claude-link | a hold posted on a `~/.claude` entry that links into a repo |
 | config | link commands run with a machine, board dir, state dir, owner, config-file or session variable (refused), and the same variables on other board commands (allowed) |
 | rename | the CLI as switchboard: link commands from a session, SWITCHBOARD_SESSIONS_DIR on a link command, the CLI by its new name and paths (not a write) and a script of that name elsewhere (a write) |
+| switches | link commands with the test switches in quoted words, `env -S` and NOW (refused), and the same names outside a link command or as plain words (allowed) |
 
 The fixture (built by `run.py` with main's copy) is a throwaway HOME with repos alpha (held whole), gamma (gamma/held held) and delta, a board clone with record dirs, and `~/.claude/lnk` linking to gamma/held with its own hold. `~/.claude` and `~/.local/bin` are held too, so `~/.claude/board` and its twin `~/.local/bin/switchboard` stand under a hold alike. A corpus file sets `C = [(where, command)]`; see `run.py` for the placeholders.
 
