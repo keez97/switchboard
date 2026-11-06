@@ -1,6 +1,6 @@
 {
   "name": "switchboard",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "Notes, holds, roles, links and tasks between Claude Code sessions, across repos and machines.",
   "author": {
     "name": "keez97",
