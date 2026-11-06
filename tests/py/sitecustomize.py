@@ -50,3 +50,17 @@ if os.environ.get("SWITCHBOARD_TEST_NOLINK"):
         raise OSError(errno.EXDEV, "test fault: no hard links")
 
     os.link = _nolink
+
+# SWITCHBOARD_TEST_PWHOME=<dir>: pwd.getpwuid() gives that home directory, so a section stands a config file in for the
+# passwd home's own and checks that the board it names is never a test board (49-test-switches.sh), with no live
+# config read or touched
+_pwhome = os.environ.get("SWITCHBOARD_TEST_PWHOME")
+if _pwhome:
+    import pwd
+    _getpwuid = pwd.getpwuid
+
+    def _test_getpwuid(uid):
+        p = _getpwuid(uid)
+        return pwd.struct_passwd(tuple(p[:5]) + (_pwhome,) + tuple(p[6:]))
+
+    pwd.getpwuid = _test_getpwuid

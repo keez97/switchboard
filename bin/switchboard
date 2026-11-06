@@ -5,7 +5,7 @@ Stdlib only, Python 3.9+. Everything a hook runs must be fast and must never fai
 `switchboard hook` swallows its own errors so a broken board cannot break a session.
 """
 import argparse, bisect, calendar, codecs, collections, contextlib, fcntl, fnmatch, hashlib, json, os, platform, re
-import shlex, signal, subprocess, sys, time
+import pwd, shlex, signal, subprocess, sys, time
 from pathlib import Path
 
 T0 = time.monotonic()  # the process starts with the hook call: the path helper's deadline counts from here
@@ -176,8 +176,51 @@ REDIRECT_FILE = re.compile(r"(?:^|[^<>&\d])(?:\d|&)?(?:>{1,2}\|?|>&|<>)\s*([^\s;
 XARGS_READS = {"grep", "cat", "wc", "head", "tail", "echo", "ls", "stat", "du", "basename", "dirname", "realpath",
                "readlink", "shasum", "sha1sum", "sha256sum", "md5", "od", "diff", "cut", "printf", "test", "true", "jq"}
 
-# set before the merge drivers, which run before the board dir is set and keep a dropped task record here
+BOARD = Path(setting("board_dir", HOME / ".local/share/switchboard", "DIR", old=True))
+
+
+def _test_board():
+    if not board_env("ALLOW_TMP"):
+        return False
+    home = pwd.getpwuid(os.getuid()).pw_dir  # no variable moves it, as HOME moves TEMP_PREFIXES' Library
+    real = os.path.realpath(BOARD)
+    if not (real + "/").startswith(TEMP_PREFIXES[:-1] + (home + "/Library/",)):
+        return False
+    try:  # the passwd home's config file: XDG_CONFIG_HOME and HOME, which pick CONFIG_FILE, do not move it
+        live = json.loads((Path(home) / ".config/switchboard/config.json").read_text())
+        live = os.path.expanduser(live["board_dir"]) if isinstance(live, dict) and isinstance(live.get("board_dir"), str) else ""
+    except Exception:
+        live = ""
+    if not live:
+        return True
+    try:
+        a, b = os.stat(real), os.stat(live)
+        return (a.st_dev, a.st_ino) != (b.st_dev, b.st_ino)
+    except OSError:  # one of them is not there: then only the same path is the same board
+        return real != os.path.realpath(live)
+
+
+_TEST_BOARD = []
+
+
+def test_board():
+    """True on a test board only (decision D16): SWITCHBOARD_ALLOW_TMP is set, the board's real path is under a temp
+    folder, and it is not the board named by the config file in the passwd home, compared by device and inode. Every
+    test switch (NOW, SESSION_ID, TEST_PROPOSE, NOWALK, GUARD_BUDGET, PULL_EVERY, WAIT_TIMEOUT, SESSIONS_DIR, STATE, a
+    temp repo's register) holds only here. A variable alone cannot make one: the configured board is never one, wherever
+    XDG_CONFIG_HOME or HOME point the config file a process reads."""
+    if not _TEST_BOARD:
+        _TEST_BOARD.append(_test_board())
+    return _TEST_BOARD[0]
+
+
+# set before the merge drivers, which run before the board dir is set and keep a dropped task record here.
+# SWITCHBOARD_STATE is a test switch: off a test board every command stops (main) rather than write this machine's
+# own state dir in its place, and the hook does nothing
 STATE = Path(setting("state_dir", HOME / ".local/state/switchboard", "STATE", old=True))
+STATE_ENV_FAULT = SOURCES["state_dir"] == "env" and not test_board()
+if STATE_ENV_FAULT:
+    STATE = Path(CONFIG.get("state_dir") or HOME / ".local/state/switchboard")
 # this CLI's own link, in the state dir only the board writes: what the merge drivers and pre-push hooks run, so they
 # never run a program of the same name the board does not own, and a plugin update moves nothing they call
 STATE_CLI = STATE / "cli"
@@ -368,14 +411,13 @@ if __name__ == "__main__" and sys.argv[1:2] in (["merge-link"], ["merge-record"]
                         {"merge-link": merge_links, "merge-record": merge_records, "merge-task": merge_task}[sys.argv[1]]))
 
 
-BOARD = Path(setting("board_dir", HOME / ".local/share/switchboard", "DIR", old=True))
 # the person whose approval the board speaks of in every note and refusal ("not %s's approval", "tell %s")
 OWNER = setting("owner", "the user", "OWNER", old=True)
 
 
 def now():
-    # the clock override is for tests only: it needs the variable that marks a test board as well
-    return int(board_env("ALLOW_TMP") and board_env("NOW") or time.time())
+    # the clock override is for tests only (test_board)
+    return int(test_board() and board_env("NOW") or time.time())
 
 
 def iso(ts=None):
@@ -505,7 +547,7 @@ def registry():
 
 def register(path, quiet=True):
     rid, root = repo_of(path)
-    temp = str(root).startswith(TEMP_PREFIXES) and not board_env("ALLOW_TMP")  # tests only
+    temp = str(root).startswith(TEMP_PREFIXES) and not test_board()  # tests only
     if not rid or temp or set(Path(root).parts) & set(SKIP):
         return None
     f = BOARD / "registry" / ("%s.%s.json" % (slug(rid), MACHINE))
@@ -2324,9 +2366,10 @@ DETACH = {"setsid", "nohup", "disown", "daemonize", "start-stop-daemon", "system
 # state dir, owner and the config file they come from): set on a link command, a spoof. SWITCHBOARD_SCOPE_IDS and
 # SWITCHBOARD_SKIP are not among them: no link command computes a link verdict or registers a repo. A session that sets
 # SWITCHBOARD_SCOPE_IDS on its own `task` read changes only what that read prints; the hook's task note runs in Claude
-# Code's environment
+# Code's environment. NOW is a test switch too (test_board); link_guard looks for these names in quoted words as well
+# (`env 'SWITCHBOARD_ALLOW_TMP=1' ...`), though a sourced file or a script carries none, and test_board is the fix
 BOARD_IDENTITY = re.compile(r"\b((?:AGENT_BOARD|SWITCHBOARD)_(?:SESSION_ID|ALLOW_TMP|TEST_PROPOSE|STATE|SESSIONS_DIR|MACHINE|"
-                            r"DIR|OWNER)|XDG_CONFIG_HOME)\b|(?<![\w$])(HOME)=")
+                            r"DIR|OWNER|NOW)|XDG_CONFIG_HOME)\b|(?<![\w$])(HOME)=")
 
 
 def board_calls(cmd, depth=0):
@@ -2357,7 +2400,7 @@ def link_guard(cmd):
         why = []
         wrap = sorted({os.path.basename(w) for w in re.split(r"[\s;&|()`'\"]+", shown)} & DETACH)  # "setsid inside -c
         wrap += ["&"] if re.search(r"(?<![&>|])&(?![&>])", shown) else []
-        wrap += sorted({a or b for a, b in BOARD_IDENTITY.findall(shown)})
+        wrap += sorted({a or b for a, b in BOARD_IDENTITY.findall(shown)} | {a or b for a, b in BOARD_IDENTITY.findall(cmd)})
         if wrap:
             why.append("runs a board link command detached or with the board's identity variables set (%s), so the CLI "
                        "could not see this session and would act as %s's terminal" % (", ".join(wrap), OWNER))
@@ -2561,7 +2604,7 @@ def guard(tool, tool_input, cwd):
             if _main_hit(tool, tool_input, cwd, cmd, writes, old, hp, link):
                 return held_msg(h), str(hp)
     budget = HELPER_BUDGET
-    if board_env("ALLOW_TMP") and board_env("GUARD_BUDGET"):  # tests only
+    if test_board() and board_env("GUARD_BUDGET"):  # tests only
         budget = float(board_env("GUARD_BUDGET"))
     _DEADLINE[0] = (_HOOK_T0[0] or time.monotonic()) + budget
     try:
@@ -3739,7 +3782,7 @@ def pull_due(every=None):
     if board_env("NOSYNC") or not (BOARD / ".git").exists():
         return
     every = min(every if every is not None else PULL_EVERY, float(board_env("PULL_EVERY") or PULL_EVERY)
-                if board_env("ALLOW_TMP") else PULL_EVERY)
+                if test_board() else PULL_EVERY)
     stamp = STATE / "pull.stamp"
 
     def fresh():  # mtime is wall clock: never now(), which tests move. A stamp ahead of the clock (it was set back) is due
@@ -4070,7 +4113,7 @@ def session_record(session):
 
 # ---------- presence, roles, links, messaging ----------
 
-SESS_DIR = Path(board_env("SESSIONS_DIR") or HOME / ".claude/sessions")
+SESS_DIR = Path(test_board() and board_env("SESSIONS_DIR") or HOME / ".claude/sessions")  # the variable: tests only
 PAIR_WINDOW, PAIR_LIMIT, WAKE_WINDOW, REMOTE_SHOWN_DAYS = 1800, 3, 1800, 3
 REFUSE_WINDOW, NAME_STOP = 1800, {"board", "switchboard", "main", "master", "README.md", "tests"}
 WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
@@ -4374,7 +4417,7 @@ def parent(pid):
 def hook_process():
     """Pid of the process that runs this hook: its first ancestor that is not a shell or a wrapper. None when there
     is none, and in a test that asks for no walk (its hooks run straight from the test shell)."""
-    if board_env("ALLOW_TMP") and board_env("NOWALK"):
+    if test_board() and board_env("NOWALK"):
         return None
     pid = os.getppid()
     for _ in range(6):
@@ -4456,7 +4499,7 @@ def _remember_session(session, sid, recheck):
         rec = load(f, None)
         rec = rec if isinstance(rec, dict) and rec.get("pid") else None
         # a test that asks for no walk runs its hooks straight from the test shell: no process above them to match
-        walk = not (board_env("ALLOW_TMP") and board_env("NOWALK"))
+        walk = not (test_board() and board_env("NOWALK"))
         # the process it names is gone, or its pid now runs another process: an earlier process of this session id,
         # and this one is recorded below. Whether that process is this hook's or another live one, the record stands
         if rec and walk and rec.get("procStart") and rec["procStart"] != proc_start(rec["pid"]):
@@ -4536,7 +4579,7 @@ def prune_processes():
 def test_session():
     """True in a test that names the calling session with SWITCHBOARD_SESSION_ID. Test boards only, like
     SWITCHBOARD_NOW: on a live board a session could otherwise pose as another session with one variable."""
-    return bool(board_env("ALLOW_TMP") and board_env("SESSION_ID"))
+    return bool(test_board() and board_env("SESSION_ID"))
 
 
 def agent_caller(d):
@@ -4617,7 +4660,7 @@ def warn_hookless(d=None):
     pid-<pid>.json, so a process with no mark of its own, at its procStart, has no hooks: the desktop app's
     --plugin-dir copy of the plugin over SSH has no hooks folder and replaces the installed plugin. Reads only; a test
     that asks for no walk gets no warning."""
-    if (board_env("ALLOW_TMP") and board_env("NOWALK")) or board_env("OFF"):
+    if (test_board() and board_env("NOWALK")) or board_env("OFF"):
         return
     d = d or own_session()
     if not d:
@@ -7229,7 +7272,7 @@ def wait():
     wakes = c.get("wakes") if isinstance(c, dict) and c.get("procStart") == ps and isinstance(c.get("wakes"), list) else []
     # keyed by the process, not the session id, which a clear changes; prune_processes drops it with the process
     save(claim, {"pid": pid, "procStart": ps, "waiter": os.getpid(), "wakes": wakes})
-    limit = float(board_env("WAIT_TIMEOUT") or WAIT_TIMEOUT) if board_env("ALLOW_TMP") else WAIT_TIMEOUT
+    limit = float(board_env("WAIT_TIMEOUT") or WAIT_TIMEOUT) if test_board() else WAIT_TIMEOUT
     rearm, passed = time.monotonic() + limit - min(WAIT_MARGIN, limit / 2), set()
     while True:
         _PS.clear()  # liveness, this process's and the role holders', is read fresh at each look
@@ -7557,6 +7600,18 @@ def config_note():
             "of it is used." % (CONFIG_FILE, "; ".join(CONFIG_FAULTS)))
 
 
+def state_env_fault(cmd):
+    """SWITCHBOARD_STATE set off a test board (test_board): it is a test switch, and using this machine's own state dir
+    in its place could write a test's records into it. A command exits 1, a hook does nothing, prepush lets the push go
+    on unchecked, as for a broken config file."""
+    why = ("SWITCHBOARD_STATE is a test switch: it works only with SWITCHBOARD_ALLOW_TMP on a board under a temp folder "
+           "that is not this machine's configured board. Set state_dir in %s instead" % tilde(CONFIG_FILE))
+    if cmd == "prepush":
+        return print("switchboard: %s. This push was not checked against holds." % why, file=sys.stderr)
+    if cmd not in ("hook", "wait"):
+        sys.exit("switchboard: %s. Nothing was run." % why)
+
+
 def config_broken(cmd):
     """A config file that is there but unusable (CONFIG_BROKEN). The board, the state dir and the machine come from it,
     so nothing runs on the defaults in their place: a command exits 1 naming the file, and a hook does nothing, with no
@@ -7687,6 +7742,8 @@ def main():
     a = ap.parse_args()
     if CONFIG_BROKEN:  # before paths, init and the board's dirs: each would act on the defaults, a board not this one
         return config_broken(a.cmd)
+    if STATE_ENV_FAULT:
+        return state_env_fault(a.cmd)
     if a.cmd == "paths":
         return paths(a.json)
     if CONFIG_FAULTS:
